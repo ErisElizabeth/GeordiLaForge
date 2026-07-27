@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OBD-II Dashboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <h1>OBD-II Dashboard</h1>
+    <span class="brand-sub">ELM327 &middot; Bluetooth LE</span>
+  </div>
+  <div class="statusbar">
+    <span id="connChip" class="chip">Disconnected</span>
+    <span id="protoChip" class="chip hidden"></span>
+    <span id="voltChip" class="chip hidden"></span>
+    <span id="rateChip" class="chip hidden"></span>
+    <span id="milChip" class="chip chip-crit hidden">&#9888; MIL ON</span>
+  </div>
+  <div class="actions">
+    <button id="btnUnits" class="btn" title="Toggle metric / imperial units">mph / &deg;F</button>
+    <button id="btnTheme" class="btn" title="Theme: auto / dark / light">Theme: auto</button>
+    <button id="btnDemo" class="btn">Demo mode</button>
+    <button id="btnProbe" class="btn" title="Dump the adapter's Bluetooth services and find the working data channel">Diagnose adapter</button>
+    <button id="btnConnect" class="btn btn-primary">Connect</button>
+  </div>
+  <img class="geordi" src="assets/GeordiLaForge.jfif"
+       alt="Geordi La Forge, Chief Engineer — inspiration" title="Engineering, at your service.">
+</header>
+
+<main>
+  <section id="noBle" class="banner banner-crit hidden">
+    This browser has no Web Bluetooth support. Use <strong>Chrome or Edge</strong> on
+    Windows, Android, macOS, or Linux. (Firefox, Safari, and all iPhone browsers cannot do this.)
+    Demo mode still works.
+  </section>
+  <section id="errBanner" class="banner banner-crit hidden"></section>
+
+  <section id="gauges" class="gauges hidden"></section>
+
+  <section id="dtcSection" class="card hidden">
+    <div class="card-head">
+      <h2>Trouble codes</h2>
+      <div class="card-actions">
+        <button id="btnRefreshDtc" class="btn btn-small">Re-read</button>
+        <button id="btnClearDtc" class="btn btn-small btn-danger">Clear codes&hellip;</button>
+      </div>
+    </div>
+    <div id="dtcSummary" class="dtc-summary"></div>
+    <div id="dtcList" class="dtc-list"></div>
+    <div id="freezeWrap" class="hidden">
+      <h3>Freeze frame <span class="h-sub">(conditions when the first code was set)</span></h3>
+      <div id="freezeTable" class="kv-table"></div>
+    </div>
+  </section>
+
+  <section id="tilesSection" class="card hidden">
+    <div class="card-head">
+      <h2>Live data</h2>
+      <span id="tileCount" class="h-sub"></span>
+    </div>
+    <div id="tiles" class="tile-grid"></div>
+  </section>
+
+  <section id="readinessSection" class="card hidden">
+    <div class="card-head"><h2>Readiness monitors</h2>
+      <span class="h-sub">emissions self-tests since codes were last cleared</span></div>
+    <div id="readiness" class="readiness-grid"></div>
+  </section>
+
+  <section id="vehicleSection" class="card hidden">
+    <div class="card-head"><h2>Vehicle &amp; adapter</h2></div>
+    <div id="vehicleInfo" class="kv-table"></div>
+  </section>
+
+  <section class="card">
+    <details id="termDetails">
+      <summary>Raw terminal</summary>
+      <div id="termLog" class="term-log" aria-live="off"></div>
+      <form id="termForm" class="term-form">
+        <input id="termInput" type="text" spellcheck="false" autocomplete="off"
+               placeholder="Raw command, e.g. ATRV or 010C (connect first)">
+        <button class="btn btn-small" type="submit">Send</button>
+      </form>
+    </details>
+  </section>
+
+  <footer class="foot">
+    Standard OBD-II generic data only &mdash; code descriptions are the SAE generic set, not
+    Kia-specific interpretations. Verify a code before buying parts.
+  </footer>
+</main>
+
+<dialog id="clearDlg">
+  <h2>Clear trouble codes?</h2>
+  <p>This sends mode <code>04</code>: it erases stored &amp; pending codes, turns the check-engine
+  light off, <strong>and resets all readiness monitors</strong>. The car will need a full
+  drive cycle (often several days of mixed driving) before it can pass an emissions
+  inspection again. It does not fix whatever set the code.</p>
+  <div class="dlg-actions">
+    <button id="dlgCancel" class="btn">Cancel</button>
+    <button id="dlgConfirm" class="btn btn-danger">Clear codes</button>
+  </div>
+</dialog>
+
+<script src="pids.js"></script>
+<script src="dtc-db.js"></script>
+<script src="obd.js"></script>
+<script src="demo.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
