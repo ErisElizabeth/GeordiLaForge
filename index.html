@@ -38,6 +38,33 @@
   </section>
   <section id="errBanner" class="banner banner-crit hidden"></section>
 
+  <section id="samplingSection" class="card">
+    <div class="card-head"><h2>Sampling mode</h2>
+      <label for="pollingMode">Live polling
+        <select id="pollingMode" disabled>
+          <option value="dashboard">Dashboard default</option>
+          <option value="focused">Focused diagnostics</option>
+        </select>
+      </label>
+    </div>
+    <p id="pollingModeStatus" role="status">Connect or enter Demo mode to choose a sampling mode.</p>
+    <p class="h-sub">Choose a mode before starting a recording. Stop the recording to change modes; the connection stays open.
+      Focused mode prioritizes verified Bank 1 O2 voltages, Bank 1 fuel trims and RPM. Other dashboard values update less often.
+      Achieved rates depend on the adapter and ECU; faster polling does not guarantee a diagnostic-quality O2 waveform.</p>
+    <details id="focusedSampling" hidden>
+      <summary>Live focused sampling rates and retries</summary>
+      <p class="h-sub">Statistics since selecting focused mode. Recording statistics are available below.
+        Missing or invalid replies trigger retry delays after two consecutive failures for that PID.
+        Waiting periods do not create artificial samples. Rates require two valid readings at distinct times.</p>
+      <p id="focusedExclusions" class="h-sub"></p>
+      <div class="recording-table-wrap"><table class="recording-table">
+        <thead><tr><th scope="col">PID / measurement</th><th scope="col">Valid</th><th scope="col">Missing</th>
+          <th scope="col">Failed</th><th scope="col">Valid Hz</th><th scope="col">Age</th><th scope="col">Retry status</th></tr></thead>
+        <tbody id="focusedSamplingRows"></tbody>
+      </table></div>
+    </details>
+  </section>
+
   <section id="recordingSection" class="card">
     <div class="card-head">
       <h2>Diagnostic recording</h2>
@@ -248,6 +275,7 @@
 </dialog>
 
 <script src="pids.js"></script>
+<script src="polling.js"></script>
 <script src="dtc-db.js"></script>
 <script src="obd.js"></script>
 <script src="demo.js"></script>

@@ -39,6 +39,9 @@ row holds operator notes if selected. Each subsequent `row_type=sample` row is
 one original observation, including PIDs outside the diagnostic graphs. Filter
 on `row_type=sample` for numeric analysis. Every row identifies the session and
 data source, including an explicit simulation warning for demo data.
+New recordings also export `polling_mode` and `polling_policy`; their report
+boundary table includes the sampling policy selected before recording. These
+fields stay empty for older recordings that did not capture a policy.
 
 Samples include receipt and queue timestamps, elapsed times, PID, measurement
 name, value, native unit, quality, failure explanation and sensor-location status.
@@ -51,7 +54,7 @@ Real numeric negative measurements remain numeric. No values are interpolated.
 Run the dependency-free tests with:
 
 ```powershell
-node --test tests/recording.test.js tests/graphs.test.js tests/exports.test.js
+node --test tests/recording.test.js tests/graphs.test.js tests/exports.test.js tests/polling.test.js
 ```
 
 `tests/report-browser-check.js` is optional PDF/preview QA. It requires an existing

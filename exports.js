@@ -51,6 +51,8 @@ function prepareDiagnosticExport(session, { omitIdentifiers = true, includeNotes
     vehicleName: omitIdentifiers ? null : diagnosticExportText(originalMetadata.vehicleName) || null,
     protocol: redact(originalMetadata.protocol) || null,
     connectionStartedAt: redact(originalMetadata.connectionStartedAt) || null,
+    polling: originalMetadata.polling ? { mode: redact(originalMetadata.polling.mode),
+      policy: redact(originalMetadata.polling.policy) } : null,
     supportedPids: Array.isArray(originalMetadata.supportedPids) ? originalMetadata.supportedPids.slice() : null,
     measurements: (originalMetadata.measurements || []).map(item => ({ pid: item.pid,
       label: redact(item.label), unit: redact(item.unit), locationVerified: item.locationVerified === true,
@@ -100,14 +102,15 @@ function diagnosticCsv(exported) {
     'recording_started_at', 'recording_ended_at', 'recording_duration_ms', 'stop_reason', 'vin',
     'recording_notes', 'timestamp', 'elapsed_ms', 'mode', 'pid_hex', 'measurement', 'value',
     'native_unit', 'quality', 'failure_explanation', 'sensor_location_verified', 'request_queued_at',
-    'request_elapsed_ms', 'response_including_queue_ms'];
+    'request_elapsed_ms', 'response_including_queue_ms', 'polling_mode', 'polling_policy'];
   const common = [exported.id, exported.source, diagnosticSourceNotice(exported.source), exported.connectionId,
     exported.startedAt, exported.endedAt, exported.endedElapsedMs, exported.stopReason, exported.metadata.vin];
-  const rows = [headers, ['recording', ...common, exported.notes, '', '', '', '', '', '', '', '', '', '', '', '', '']];
+  const polling = [exported.metadata.polling?.mode, exported.metadata.polling?.policy];
+  const rows = [headers, ['recording', ...common, exported.notes, '', '', '', '', '', '', '', '', '', '', '', '', '', ...polling]];
   for (const sample of exported.samples) rows.push(['sample', ...common, '', sample.timestamp, sample.elapsedMs,
     sample.mode, sample.pidHex, sample.label, sample.value, sample.unit, sample.quality, sample.reason,
     sample.locationVerified === null || sample.locationVerified === undefined ? '' : String(sample.locationVerified),
-    sample.requestedAt, sample.requestElapsedMs, sample.responseMs]);
+    sample.requestedAt, sample.requestElapsedMs, sample.responseMs, ...polling]);
   return '\ufeff' + rows.map(row => row.map(diagnosticCsvCell).join(',')).join('\r\n') + '\r\n';
 }
 

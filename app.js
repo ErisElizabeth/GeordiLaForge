@@ -16,6 +16,7 @@ const diagnosticExports = new DiagnosticExports(() => recorder.session);
 const state = {
   running: false,
   busy: false, connection: null, supported: new Set(), sensorMask: null, vehicle: {},
+  pollingMode: 'dashboard', pollingRevision: 0, focusPlan: null,
   fast: [], slow: [], slowIdx: 0, cycle: 0,
   tiles: new Map(),      // pid -> {root, valueEl, unitEl, canvas, barEl, def}
   hist: new Map(),       // pid -> number[]
@@ -25,6 +26,56 @@ const state = {
   theme: localStorage.getItem('theme') || 'auto',
   failures: 0,
 };
+
+/* ---------------- sampling mode ---------------- */
+function pollingMetadata() {
+  if (state.pollingMode === 'focused' && state.focusPlan) {
+    return { mode: state.focusPlan.active ? 'focused' : 'dashboard', requestedMode: 'focused',
+      policy: state.focusPlan.description() };
+  }
+  return { mode: 'dashboard', requestedMode: 'dashboard',
+    policy: 'Dashboard default: fast PIDs every round plus one rotating slow PID; no focused retry delays.' };
+}
+
+function setPollingMode(mode) {
+  if (!['dashboard', 'focused'].includes(mode) || !state.running || state.busy || recorder.active) {
+    renderPollingMode(); return false;
+  }
+  if (mode !== state.pollingMode) {
+    state.pollingMode = mode; state.pollingRevision++;
+    state.focusPlan = mode === 'focused' ? new FocusedPollingPlan(state.supported, state.sensorMask) : null;
+    if (state.focusPlan) state.focusPlan.source = state.connection.source;
+    log('sys', pollingMetadata().policy);
+  }
+  renderPollingMode(); return true;
+}
+
+function renderPollingMode() {
+  $('#pollingMode').value = state.pollingMode;
+  $('#pollingMode').disabled = !state.running || state.busy || recorder.active;
+  const source = state.connection?.source || state.focusPlan?.source;
+  $('#pollingModeStatus').textContent = (source === 'demo' ? 'SIMULATED DATA — ' : '') +
+    (!state.running ? 'Polling stopped. Connect or enter Demo mode to choose a sampling mode.' : pollingMetadata().policy) +
+    (recorder.active ? ' Stop the recording to change modes.' : '');
+  $('#focusedSampling').hidden = state.pollingMode !== 'focused' || !state.focusPlan;
+  const rows = $('#focusedSamplingRows'); rows.innerHTML = '';
+  $('#focusedExclusions').textContent = state.focusPlan ? state.focusPlan.excluded.map(item =>
+    'PID ' + hex2(item.pid) + ': ' + item.reason).join('; ') : '';
+  if (!state.focusPlan?.active) return;
+  for (const stats of state.focusPlan.summary(performance.now())) {
+    const row = el('tr');
+    const label = recordingLabel(stats.pid).label;
+    for (const value of ['01 ' + hex2(stats.pid) + ' · ' + label, stats.valid, stats.missing, stats.failed,
+      stats.rateHz === null ? '—' : stats.rateHz.toFixed(3),
+      stats.ageMs === null ? 'No valid reading' : (stats.ageMs / 1000).toFixed(1) + ' s',
+      stats.retryMs ? 'Retry in ' + Math.ceil(stats.retryMs / 1000) + ' s' : 'Eligible']) {
+      row.appendChild(el('td', null, String(value)));
+    }
+    rows.appendChild(row);
+  }
+}
+
+$('#pollingMode').addEventListener('change', () => setPollingMode($('#pollingMode').value));
 
 /* ---------------- recording ---------------- */
 function recordingLabel(pid) {
@@ -49,6 +100,7 @@ function recordingDuration(ms) {
 
 function renderRecording() {
   recorder.enforceLimit();
+  renderPollingMode();
   const session = recorder.session;
   $('#btnRecordStart').disabled = recorder.active || !state.running || state.busy;
   $('#btnRecordStop').disabled = !recorder.active;
@@ -91,11 +143,13 @@ $('#btnRecordStart').addEventListener('click', () => {
   if (previous && !window.confirm('Start a new recording? This replaces the recording currently held in this tab.')) return;
   const notes = previous ? '' : $('#recordingNotes').value;
   recorder.start({ connectionId: state.connection.id, source: state.connection.source,
-    notes, metadata: { ...state.vehicle, connectionStartedAt: state.connection.startedAt,
+    notes, metadata: { ...state.vehicle, polling: pollingMetadata(), connectionStartedAt: state.connection.startedAt,
       supportedPids: [...state.supported].sort((a, b) => a - b),
       sensorLocationPid13: state.sensorMask,
       measurements: [...state.supported].filter(pid => PIDS[pid]).map(pid =>
         ({ pid, ...recordingLabel(pid), unit: PIDS[pid].unit || '', static: !!PIDS[pid].static })) } });
+  recorder.session.events.push({ type: 'sampling-mode', timestamp: recorder.session.startedAt, elapsedMs: 0,
+    reason: recorder.session.metadata.polling.policy });
   $('#recordingNotes').value = notes;
   renderRecording();
 });
@@ -306,6 +360,7 @@ function resetUi() {
     .forEach(id => $('#' + id).classList.add('hidden'));
   state.tiles.clear(); state.hist.clear(); state.last.clear(); state.gauges.clear();
   state.supported = new Set(); state.sensorMask = null; state.vehicle = {};
+  state.pollingMode = 'dashboard'; state.focusPlan = null; state.pollingRevision++;
   state.cycle = 0; state.slowIdx = 0; state.failures = 0;
   $('#milChip').classList.add('hidden');
   ['protoChip', 'voltChip', 'rateChip'].forEach(id => $('#' + id).classList.add('hidden'));
@@ -432,11 +487,16 @@ async function samplePid(pid, connection = state.connection) {
   // Capture before queue submission. A recording started while this read is in
   // flight must not inherit it, even when the Bluetooth connection is unchanged.
   const request = recorder.captureRequest(connection.id);
+  const focusPlan = state.pollingMode === 'focused' && state.focusPlan?.active ? state.focusPlan : null;
+  const observe = quality => {
+    if (focusPlan && state.focusPlan === focusPlan) focusPlan.observe(pid, quality, performance.now());
+  };
   let responseRecorded = false;
   try {
     const b = await connection.client.pid01(pid, 5000);
     if (!currentConnection(connection)) return;
     const reading = decodePidReading(pid, b);
+    observe(reading.quality);
     recordReading(request, pid, reading);
     responseRecorded = true;
     if (reading.quality === 'valid') {
@@ -449,7 +509,10 @@ async function samplePid(pid, connection = state.connection) {
     }
   } catch (e) {
     if (!currentConnection(connection)) return;
-    if (!responseRecorded) recordReading(request, pid, { quality: 'failed', value: null, reason: e.message });
+    if (!responseRecorded) {
+      observe('failed');
+      recordReading(request, pid, { quality: 'failed', value: null, reason: e.message });
+    }
     state.running = false;
     recorder.stop('polling-error');
     showError(e.message);
@@ -461,16 +524,36 @@ async function pollLoop(connection = state.connection) {
   const session = ++pollSession;
   const active = () => state.running && session === pollSession && currentConnection(connection);
   let queries = 0, t0 = performance.now();
-  while (active()) {
-    for (const pid of state.fast) {
+  polling: while (active()) {
+    const revision = state.pollingRevision;
+    const focusPlan = state.pollingMode === 'focused' && state.focusPlan?.active ? state.focusPlan : null;
+    if (focusPlan) {
+      const batch = focusPlan.nextBatch(performance.now());
+      if (!batch.length) {
+        await new Promise(r => setTimeout(r, focusPlan.idleDelay(performance.now())));
+        continue;
+      }
+      for (const pid of batch) {
+        if (!active()) return;
+        if (revision !== state.pollingRevision) continue polling;
+        if (!focusPlan.eligible(pid, performance.now())) continue;
+        await samplePid(pid, connection); queries++;
+      }
+    } else {
+      // Preserve the original dashboard request order and slow rotation.
+      for (const pid of state.fast) {
+        if (!active()) return;
+        if (revision !== state.pollingRevision) continue polling;
+        await samplePid(pid, connection); queries++;
+      }
       if (!active()) return;
-      await samplePid(pid, connection); queries++;
+      if (revision !== state.pollingRevision) continue polling;
+      if (state.slow.length) {
+        await samplePid(state.slow[state.slowIdx++ % state.slow.length], connection); queries++;
+      }
     }
     if (!active()) return;
-    if (state.slow.length) {
-      await samplePid(state.slow[state.slowIdx++ % state.slow.length], connection); queries++;
-    }
-    if (!active()) return;
+    if (revision !== state.pollingRevision) continue;
     if (++state.cycle % 10 === 0) {
       const v = await connection.client.voltage().catch(() => null);
       if (!active()) return;
