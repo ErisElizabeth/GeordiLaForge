@@ -9,17 +9,114 @@ const el = (tag, cls, text) => {
 };
 
 let transport = null, elm = null, pollSession = 0;
+let connectionSerial = 0;
+const recorder = new TelemetryRecorder();
+const diagnosticGraphs = new DiagnosticGraphs();
 const state = {
   running: false,
+  busy: false, connection: null, supported: new Set(), sensorMask: null, vehicle: {},
   fast: [], slow: [], slowIdx: 0, cycle: 0,
   tiles: new Map(),      // pid -> {root, valueEl, unitEl, canvas, barEl, def}
   hist: new Map(),       // pid -> number[]
-  last: new Map(),       // pid -> raw value
+  last: new Map(),       // pid -> decoded value in native units, or text
   gauges: new Map(),     // pid -> {update}
   imperial: localStorage.getItem('units') === 'imperial',
   theme: localStorage.getItem('theme') || 'auto',
   failures: 0,
 };
+
+/* ---------------- recording ---------------- */
+function recordingLabel(pid) {
+  const def = PIDS[pid];
+  if (pid >= 0x14 && pid <= 0x1B) {
+    const verified = state.sensorMask !== null && !state.supported.has(0x1D) &&
+      !!(state.sensorMask & (1 << (pid - 0x14)));
+    return { label: verified ? def.name : 'O2 sensor ' + (pid - 0x13) + ' voltage (location unverified)',
+      locationVerified: verified };
+  }
+  return { label: def.name, locationVerified: null };
+}
+
+function recordReading(request, pid, reading) {
+  recorder.record(request, { pid, ...recordingLabel(pid), unit: PIDS[pid].unit || '', ...reading });
+}
+
+function recordingDuration(ms) {
+  const seconds = Math.floor(ms / 1000);
+  return Math.floor(seconds / 60) + 'm ' + String(seconds % 60).padStart(2, '0') + 's';
+}
+
+function renderRecording() {
+  recorder.enforceLimit();
+  const session = recorder.session;
+  $('#btnRecordStart').disabled = recorder.active || !state.running || state.busy;
+  $('#btnRecordStop').disabled = !recorder.active;
+  const status = $('#recordingStatus');
+  status.textContent = recorder.active ? 'Recording' : session ? 'Stopped' : 'Not recording';
+  status.className = 'chip' + (recorder.active ? ' chip-crit' : '');
+  const summary = recorder.summary();
+  diagnosticGraphs.update(session, summary);
+  if (!session) return;
+  const reasons = { 'operator-stop': 'Stopped by operator', disconnected: 'Connection ended',
+    reconnect: 'Connection replaced', 'adapter-probe': 'Adapter diagnosis started',
+    'page-hidden': 'Page closed or reloaded', 'polling-error': 'Acquisition stopped after an error',
+    'sample-limit': '20,000-result limit reached', 'duration-limit': '60-minute limit reached' };
+  $('#recordingSummary').textContent = new Date(session.startedAt).toLocaleString() + ' · ' +
+    recordingDuration(summary.durationMs) + ' · ' + summary.samples + ' results: ' +
+    summary.valid + ' valid, ' + summary.missing + ' missing, ' + summary.failed + ' failed.' +
+    (session.stopReason ? ' ' + (reasons[session.stopReason] || session.stopReason) + '.' : '');
+  $('#recordingSource').textContent = session.source === 'demo'
+    ? 'SIMULATED DATA — Demo adapter. This recording is not vehicle diagnostic evidence.'
+    : 'Vehicle data — ' + (session.metadata.protocol || 'protocol not reported') +
+      '. Sensor locations are unverified unless confirmed by the vehicle\'s sensor-location response.';
+  const rows = $('#recordingQualityRows');
+  rows.innerHTML = '';
+  for (const series of summary.series) {
+    const row = el('tr');
+    for (const value of ['01 ' + hex2(series.pid) + ' · ' + series.label + (series.unit ? ' (' + series.unit + ')' : ''),
+      series.valid, series.missing, series.failed,
+      series.rateHz === null ? '—' : series.rateHz.toFixed(3),
+      series.ageMs === null ? 'No valid reading' : (series.ageMs / 1000).toFixed(1) + ' s']) {
+      row.appendChild(el('td', null, String(value)));
+    }
+    rows.appendChild(row);
+  }
+}
+
+$('#btnRecordStart').addEventListener('click', () => {
+  if (!state.running || state.busy || !state.connection || recorder.active) return;
+  const previous = recorder.session;
+  if (previous && !window.confirm('Start a new recording? This replaces the recording currently held in this tab.')) return;
+  const notes = previous ? '' : $('#recordingNotes').value;
+  recorder.start({ connectionId: state.connection.id, source: state.connection.source,
+    notes, metadata: { ...state.vehicle, connectionStartedAt: state.connection.startedAt,
+      supportedPids: [...state.supported].sort((a, b) => a - b),
+      sensorLocationPid13: state.sensorMask,
+      measurements: [...state.supported].filter(pid => PIDS[pid]).map(pid =>
+        ({ pid, ...recordingLabel(pid), unit: PIDS[pid].unit || '', static: !!PIDS[pid].static })) } });
+  $('#recordingNotes').value = notes;
+  renderRecording();
+});
+$('#btnRecordStop').addEventListener('click', () => { recorder.stop(); renderRecording(); });
+$('#recordingNotes').addEventListener('input', () => recorder.setNotes($('#recordingNotes').value));
+
+function currentConnection(connection) {
+  return !!connection && state.connection === connection && connection.client === elm;
+}
+
+function setConnectionBusy(busy) {
+  state.busy = busy;
+  ['btnConnect', 'btnDemo', 'btnProbe'].forEach(id => { $('#' + id).disabled = busy; });
+  renderRecording();
+}
+
+function disconnectCurrent(reason = 'disconnected') {
+  const connection = state.connection;
+  if (!connection) return;
+  // Invalidate before disconnecting: synchronous callbacks and late promises are harmless.
+  onDisconnected(connection, reason);
+  try { connection.transport.onDisconnect = null; connection.transport.disconnect(); } catch (e) {}
+}
 
 /* ---------------- logging ---------------- */
 function log(kind, text) {
@@ -206,6 +303,7 @@ function resetUi() {
   ['gauges', 'dtcSection', 'tilesSection', 'readinessSection', 'vehicleSection']
     .forEach(id => $('#' + id).classList.add('hidden'));
   state.tiles.clear(); state.hist.clear(); state.last.clear(); state.gauges.clear();
+  state.supported = new Set(); state.sensorMask = null; state.vehicle = {};
   state.cycle = 0; state.slowIdx = 0; state.failures = 0;
   $('#milChip').classList.add('hidden');
   ['protoChip', 'voltChip', 'rateChip'].forEach(id => $('#' + id).classList.add('hidden'));
@@ -217,59 +315,80 @@ function playTricorder() {
 }
 
 async function connect(useDemo) {
+  if (state.busy) return;
   if (!useDemo && !navigator.bluetooth) {
     $('#noBle').classList.remove('hidden');
     return;
   }
+  setConnectionBusy(true);
   playTricorder();
-  if (transport) {                       // never orphan a live link — the adapter allows only one client
-    state.running = false;
-    try { transport.onDisconnect = null; transport.disconnect(); } catch (e) {}
-    transport = null; elm = null;
+  if (state.connection) {                // never orphan a live link — the adapter allows only one client
+    disconnectCurrent('reconnect');
     await new Promise(r => setTimeout(r, 400));
   }
   resetUi();
   setChip('Connecting…');
-  transport = useDemo ? new DemoTransport() : new BleTransport();
+  const nextTransport = useDemo ? new DemoTransport() : new BleTransport();
+  const connection = { id: ++connectionSerial, transport: nextTransport, client: null,
+    source: useDemo ? 'demo' : 'vehicle', startedAt: null };
+  state.connection = connection;
+  transport = nextTransport;
   try {
-    await transport.connect(m => log('sys', m));
+    await nextTransport.connect(m => log('sys', m));
   } catch (e) {
+    state.connection = null;
+    try { nextTransport.onDisconnect = null; nextTransport.disconnect(); } catch (ignored) {}
     transport = null;
     setChip('Disconnected');
     if (e.name !== 'NotFoundError') showError('Bluetooth: ' + e.message);
+    setConnectionBusy(false);
     return;
   }
-  transport.onDisconnect = onDisconnected;
-  elm = new Elm(transport, log);
+  connection.startedAt = new Date().toISOString();
+  nextTransport.onDisconnect = () => onDisconnected(connection);
+  connection.client = new Elm(nextTransport, log);
+  elm = connection.client;
+  const client = connection.client;
   $('#btnConnect').textContent = 'Disconnect';
   try {
-    const ident = await elm.init();
+    const ident = await client.init();
+    if (!currentConnection(connection)) return;
     setChip(useDemo ? 'Demo' : 'Connected', 'chip-good');
     log('sys', 'Adapter: ' + ident);
 
     setChip('Reading ECU…', 'chip-good');
-    const supported = await elm.supportedPids();
+    const supported = await client.supportedPids();
+    if (!currentConnection(connection)) return;
     if (!supported.size)
       throw new Error('The adapter connected but the ECU did not answer. Ignition on (position II) or engine running?');
 
-    const proto = await elm.protocol();
+    state.supported = supported;
+    const proto = await client.protocol();
+    if (!currentConnection(connection)) return;
     $('#protoChip').textContent = proto;
     $('#protoChip').classList.remove('hidden');
-    const volts = await elm.voltage();
+    const volts = await client.voltage();
+    if (!currentConnection(connection)) return;
     if (volts) { $('#voltChip').textContent = volts.toFixed(1) + ' V'; $('#voltChip').classList.remove('hidden'); }
 
     buildDashboard(supported);
     setChip(useDemo ? 'Demo — live' : 'Live', 'chip-good');
 
-    await readStatics(supported);
-    await refreshVehicle(ident, proto, supported);
-    await refreshDtcs(supported);
+    await readStatics(supported, connection);
+    if (!currentConnection(connection)) return;
+    await refreshVehicle(ident, proto, supported, connection);
+    if (!currentConnection(connection)) return;
+    await refreshDtcs(supported, connection);
+    if (!currentConnection(connection)) return;
 
     state.running = true;
-    pollLoop();
+    pollLoop(connection);
   } catch (e) {
+    if (!currentConnection(connection)) return;
     showError(e.message);
     setChip('Error', 'chip-crit');
+  } finally {
+    setConnectionBusy(false);
   }
 }
 
@@ -292,44 +411,67 @@ function buildDashboard(supported) {
     log('sys', 'ECU also advertises undecoded PIDs: ' + unknown.map(hex2).join(' '));
 }
 
-async function readStatics(supported) {
+async function readStatics(supported, connection = state.connection) {
   for (const pid of [...supported].filter(p => PIDS[p] && PIDS[p].static)) {
-    const b = await elm.pid01(pid);
-    if (b) pushSample(pid, PIDS[pid].decode(b));
+    if (!currentConnection(connection)) return;
+    const b = await connection.client.pid01(pid);
+    if (!currentConnection(connection)) return;
+    const reading = decodePidReading(pid, b);
+    if (reading.quality === 'valid') {
+      if (pid === 0x13) state.sensorMask = b[0];
+      pushSample(pid, reading.value);
+    }
   }
 }
 
 /* ---------------- polling ---------------- */
-async function samplePid(pid) {
+async function samplePid(pid, connection = state.connection) {
+  if (!currentConnection(connection)) return;
+  // Capture before queue submission. A recording started while this read is in
+  // flight must not inherit it, even when the Bluetooth connection is unchanged.
+  const request = recorder.captureRequest(connection.id);
+  let responseRecorded = false;
   try {
-    const b = await elm.pid01(pid, 5000);
-    if (b) {
+    const b = await connection.client.pid01(pid, 5000);
+    if (!currentConnection(connection)) return;
+    const reading = decodePidReading(pid, b);
+    recordReading(request, pid, reading);
+    responseRecorded = true;
+    if (reading.quality === 'valid') {
       state.failures = 0;
-      const v = PIDS[pid].decode(b);
+      const v = reading.value;
       if (PIDS[pid].text) { state.last.set(pid, v); renderValue(pid, v); }
       else pushSample(pid, v);
     } else if (++state.failures > 12) {
       throw new Error('The ECU stopped answering. Did the ignition turn off?');
     }
   } catch (e) {
+    if (!currentConnection(connection)) return;
+    if (!responseRecorded) recordReading(request, pid, { quality: 'failed', value: null, reason: e.message });
     state.running = false;
+    recorder.stop('polling-error');
     showError(e.message);
+    renderRecording();
   }
 }
 
-async function pollLoop() {
+async function pollLoop(connection = state.connection) {
   const session = ++pollSession;
+  const active = () => state.running && session === pollSession && currentConnection(connection);
   let queries = 0, t0 = performance.now();
-  while (state.running && session === pollSession) {
+  while (active()) {
     for (const pid of state.fast) {
-      if (!state.running || session !== pollSession) return;
-      await samplePid(pid); queries++;
+      if (!active()) return;
+      await samplePid(pid, connection); queries++;
     }
+    if (!active()) return;
     if (state.slow.length) {
-      await samplePid(state.slow[state.slowIdx++ % state.slow.length]); queries++;
+      await samplePid(state.slow[state.slowIdx++ % state.slow.length], connection); queries++;
     }
+    if (!active()) return;
     if (++state.cycle % 10 === 0) {
-      const v = await elm.voltage().catch(() => null);
+      const v = await connection.client.voltage().catch(() => null);
+      if (!active()) return;
       if (v) $('#voltChip').textContent = v.toFixed(1) + ' V';
     }
     const now = performance.now();
@@ -358,14 +500,19 @@ function dtcCard(code, pending) {
   return card;
 }
 
-async function refreshDtcs(supported) {
+async function refreshDtcs(supported, connection = state.connection) {
+  if (!currentConnection(connection)) return;
+  const client = connection.client;
   const list = $('#dtcList'), summary = $('#dtcSummary');
   list.innerHTML = ''; summary.innerHTML = '';
   $('#freezeWrap').classList.add('hidden');
 
-  const st = supported.has(0x01) ? await elm.status() : null;
-  const stored = await elm.readDtcs(0x03);
-  const pending = await elm.readDtcs(0x07);
+  const st = supported.has(0x01) ? await client.status() : null;
+  if (!currentConnection(connection)) return;
+  const stored = await client.readDtcs(0x03);
+  if (!currentConnection(connection)) return;
+  const pending = await client.readDtcs(0x07);
+  if (!currentConnection(connection)) return;
 
   if (st) {
     $('#milChip').classList.toggle('hidden', !st.mil);
@@ -383,20 +530,26 @@ async function refreshDtcs(supported) {
     for (const c of pending) list.appendChild(dtcCard(c, true));
   }
 
-  if (stored.length) await refreshFreeze(supported);
+  if (stored.length) await refreshFreeze(supported, connection);
 }
 
-async function refreshFreeze(supported) {
+async function refreshFreeze(supported, connection = state.connection) {
+  if (!currentConnection(connection)) return;
+  const client = connection.client;
   const rows = [];
-  const dtcBytes = await elm.freeze(0x02);
+  const dtcBytes = await client.freeze(0x02);
+  if (!currentConnection(connection)) return;
   if (dtcBytes && dtcBytes.length >= 2) {
-    const code = elm._dtcFromBytes(dtcBytes[0], dtcBytes[1]);
+    const code = client._dtcFromBytes(dtcBytes[0], dtcBytes[1]);
     if (code) rows.push(['Code that froze the frame', code]);
   }
   for (const pid of FREEZE_PIDS.filter(p => supported.has(p))) {
-    const b = await elm.freeze(pid);
-    if (!b) continue;
-    const def = PIDS[pid], v = def.decode(b);
+    if (!currentConnection(connection)) return;
+    const b = await client.freeze(pid);
+    if (!currentConnection(connection)) return;
+    const reading = decodePidReading(pid, b);
+    if (reading.quality !== 'valid') continue;
+    const def = PIDS[pid], v = reading.value;
     rows.push([def.name, def.text ? v : fmtValue(def, v) + ' ' + convert(def, v).unit]);
   }
   if (!rows.length) return;
@@ -424,16 +577,20 @@ function renderReadiness(monitors) {
 }
 
 /* ---------------- vehicle info ---------------- */
-async function refreshVehicle(ident, proto, supported) {
+async function refreshVehicle(ident, proto, supported, connection = state.connection) {
+  if (!currentConnection(connection)) return;
   const rows = [];
-  const vin = await elm.readVin().catch(() => null);
+  const vin = await connection.client.readVin().catch(() => null);
+  if (!currentConnection(connection)) return;
+  state.vehicle = { vin, protocol: proto, adapter: ident,
+    interface: connection.source === 'demo' ? 'Demo (simulated)' :
+      (connection.transport.device && connection.transport.device.name) || 'BLE' };
   rows.push(['VIN', vin || 'not reported']);
   if (state.last.has(0x1C)) rows.push(['OBD standard', state.last.get(0x1C)]);
   if (state.last.has(0x51)) rows.push(['Fuel type', state.last.get(0x51)]);
   rows.push(['Protocol', proto]);
   rows.push(['Adapter', ident]);
-  rows.push(['Interface', transport instanceof DemoTransport ? 'Demo (simulated)' :
-    (transport.device && transport.device.name) || 'BLE']);
+  rows.push(['Interface', state.vehicle.interface]);
   const t = $('#vehicleInfo');
   t.innerHTML = '';
   for (const [k, v] of rows) {
@@ -470,7 +627,7 @@ const short = shortUuid;
 
 async function probeAdapter() {
   if (!navigator.bluetooth) { showError('No Web Bluetooth in this browser.'); return; }
-  if (transport) { state.running = false; transport.disconnect(); transport = null; elm = null; }
+  disconnectCurrent('adapter-probe');
   $('#termDetails').open = true;
   log('sys', '=== adapter probe: pick the OBDII device again ===');
 
@@ -547,35 +704,40 @@ async function probeAdapter() {
 }
 
 /* ---------------- disconnect & buttons ---------------- */
-function onDisconnected() {
+function onDisconnected(connection = state.connection, reason = 'disconnected') {
+  if (!connection || state.connection !== connection) return;
   state.running = false;
+  pollSession++;
+  recorder.endConnection(connection.id, reason);
+  state.connection = null; transport = null; elm = null;
   setChip('Disconnected');
   $('#btnConnect').textContent = 'Connect';
   log('sys', 'Adapter disconnected.');
+  renderRecording();
 }
 
 $('#btnConnect').addEventListener('click', () => {
-  if (transport && (state.running || $('#btnConnect').textContent === 'Disconnect')) {
-    state.running = false;
-    transport.disconnect();
-    transport = null; elm = null;
-    onDisconnected();
+  if (state.connection) {
+    disconnectCurrent();
   } else {
     connect(false);
   }
 });
 $('#btnProbe').addEventListener('click', () => {
-  probeAdapter().catch(e => log('err', 'probe: ' + e.message));
+  if (state.busy) return;
+  setConnectionBusy(true);
+  probeAdapter().catch(e => log('err', 'probe: ' + e.message)).finally(() => setConnectionBusy(false));
 });
 $('#btnDemo').addEventListener('click', () => {
-  if (transport) { state.running = false; transport.disconnect(); }
   connect(true);
 });
 
 $('#btnRefreshDtc').addEventListener('click', async () => {
   if (!elm) return;
+  const connection = state.connection;
   const supported = new Set([...state.tiles.keys(), 0x01]);
-  await refreshDtcs(supported);
+  try { await refreshDtcs(supported, connection); }
+  catch (e) { if (currentConnection(connection)) showError(e.message); }
 });
 $('#btnClearDtc').addEventListener('click', () => {
   if (!elm) return;
@@ -584,10 +746,15 @@ $('#btnClearDtc').addEventListener('click', () => {
 $('#dlgCancel').addEventListener('click', () => $('#clearDlg').close());
 $('#dlgConfirm').addEventListener('click', async () => {
   $('#clearDlg').close();
-  const ok = await elm.clearDtcs();
-  log('sys', ok ? 'Codes cleared.' : 'Clear command not acknowledged.');
-  const supported = new Set([...state.tiles.keys(), 0x01]);
-  await refreshDtcs(supported);
+  const connection = state.connection;
+  if (!currentConnection(connection)) return;
+  try {
+    const ok = await connection.client.clearDtcs();
+    if (!currentConnection(connection)) return;
+    log('sys', ok ? 'Codes cleared.' : 'Clear command not acknowledged.');
+    const supported = new Set([...state.tiles.keys(), 0x01]);
+    await refreshDtcs(supported, connection);
+  } catch (e) { if (currentConnection(connection)) showError(e.message); }
 });
 
 $('#termForm').addEventListener('submit', ev => {
@@ -601,12 +768,14 @@ $('#termForm').addEventListener('submit', ev => {
 
 /* Release the adapter on reload/close, or it keeps believing it has a client. */
 window.addEventListener('pagehide', () => {
-  state.running = false;
-  try { if (transport) { transport.onDisconnect = null; transport.disconnect(); } } catch (e) {}
+  disconnectCurrent('page-hidden');
 });
 
 /* ---------------- boot ---------------- */
 applyTheme();
 unitsLabel();
+renderRecording();
+// UI clock only. It never issues PID or adapter commands.
+window.setInterval(renderRecording, 1000);
 if (!navigator.bluetooth) $('#noBle').classList.remove('hidden');
 log('sys', 'Ready. Connect to an ELM327 BLE adapter, or try Demo mode.');

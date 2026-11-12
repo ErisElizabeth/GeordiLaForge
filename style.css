@@ -14,6 +14,10 @@
   --warn:      #fab219;
   --serious:   #ec835a;
   --crit:      #d03b3b;
+  --graph-bg: #ffffff;
+  --graph-grid: #d6d6d6;
+  --graph-blue: #0064a5;
+  --graph-orange: #ad3d00;
 }
 @media (prefers-color-scheme: dark) {
   :root:where(:not([data-theme="light"])) {
@@ -27,6 +31,10 @@
     --border:    rgba(255, 255, 255, 0.10);
     --accent:    #3987e5;
     --good-text: #0ca30c;
+    --graph-bg: #181818;
+    --graph-grid: #444444;
+    --graph-blue: #65c4ff;
+    --graph-orange: #ffb477;
   }
 }
 :root[data-theme="dark"] {
@@ -40,6 +48,10 @@
   --border:    rgba(255, 255, 255, 0.10);
   --accent:    #3987e5;
   --good-text: #0ca30c;
+  --graph-bg: #181818;
+  --graph-grid: #444444;
+  --graph-blue: #65c4ff;
+  --graph-orange: #ffb477;
 }
 
 * { box-sizing: border-box; }
@@ -114,6 +126,51 @@ main { max-width: 1180px; margin: 0 auto; padding: 12px 16px 40px; }
 .card-actions { margin-left: auto; display: flex; gap: 6px; }
 h3 { font-size: 13px; margin: 14px 0 6px; }
 .h-sub { color: var(--muted); font-size: 12px; font-weight: 400; }
+
+/* ---- diagnostic recording (passive collection) ---- */
+#recordingSection p { margin: 8px 0; }
+#recordingSection .card-actions { flex-wrap: wrap; }
+#recordingSection label { display: block; margin-top: 10px; font-weight: 600; }
+#recordingNotes {
+  display: block; width: 100%; max-width: 100%; resize: vertical;
+  margin: 5px 0; padding: 8px; font: inherit;
+  color: var(--ink); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.recording-source { font-weight: 650; }
+.recording-table-wrap { overflow-x: auto; margin-top: 8px; }
+.recording-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.recording-table caption { text-align: left; margin-bottom: 6px; }
+.recording-table th, .recording-table td {
+  padding: 6px 8px; border-bottom: 1px solid var(--hairline);
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+.recording-table th:first-child, .recording-table td:first-child { text-align: left; }
+.recording-table th { color: var(--ink-2); white-space: nowrap; }
+
+/* ---- recorded diagnostic graphs ---- */
+[hidden] { display: none !important; }
+.graph-controls, .graph-custom { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 16px; }
+.graph-controls label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; }
+.graph-controls select, .graph-controls input {
+  color: var(--ink); background: var(--bg); font: inherit; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: 6px; min-height: 36px; max-width: 100%;
+}
+.graph-controls input { width: 120px; }
+.graph-error { color: var(--crit); font-weight: 600; }
+.graph-guidance { color: var(--ink-2); font-size: 12px; }
+.graph-caution { border-left: 3px solid var(--warn); padding-left: 10px; font-size: 13px; }
+.diagnostic-graph { margin: 18px 0 26px; min-width: 0; }
+.diagnostic-graph figcaption { font-size: 15px; font-weight: 650; }
+.diagnostic-graph canvas { display: block; width: 100%; height: 280px; touch-action: pan-y; border: 1px solid var(--border); border-radius: 6px; }
+.diagnostic-graph canvas:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.graph-legend { list-style: none; padding: 0; margin: 8px 0 10px; display: grid; gap: 8px; }
+.graph-series-name { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 650; }
+.graph-series-quality { display: block; margin: 2px 0 0 18px; color: var(--ink-2); font-size: 12px; }
+.graph-swatch { width: 10px; height: 10px; display: inline-block; flex: none; }
+.graph-circle { border-radius: 50%; }
+.graph-inspection-controls { display: flex; gap: 8px; margin-top: 8px; }
+.graph-inspection { display: block; margin-top: 6px; min-height: 2.9em; color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 
 /* ---- gauges ---- */
 .gauges {

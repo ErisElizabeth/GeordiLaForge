@@ -38,6 +38,120 @@
   </section>
   <section id="errBanner" class="banner banner-crit hidden"></section>
 
+  <section id="recordingSection" class="card">
+    <div class="card-head">
+      <h2>Diagnostic recording</h2>
+      <span id="recordingStatus" class="chip" role="status">Not recording</span>
+      <div class="card-actions">
+        <button id="btnRecordStart" class="btn btn-primary" disabled>Start recording</button>
+        <button id="btnRecordStop" class="btn" disabled>Stop recording</button>
+      </div>
+    </div>
+    <p id="recordingSummary">Connect or enter Demo mode to record the existing live PID stream.</p>
+    <p id="recordingSource" class="recording-source"></p>
+    <label for="recordingNotes">Operator notes</label>
+    <textarea id="recordingNotes" rows="3" maxlength="4000"
+      placeholder="Describe conditions you observed, e.g. warm idle or approximately 2,000 RPM."></textarea>
+    <p class="h-sub">Kept in this tab only; reloading loses the recording. A new recording replaces the previous one.
+      Recording stops at 20,000 results or 60 minutes and keeps the collected data.</p>
+    <details id="recordingQuality">
+      <summary>Sampling and data quality</summary>
+      <p class="h-sub">Native units; timestamps mark browser receipt. Request durations include queue wait.
+        Only requests queued and completed during this recording are included.
+        Rates use valid sample intervals; unavailable rates require at least two valid readings.
+        Missing results cannot distinguish NO DATA from a timeout. Unsupported PIDs are not requested.</p>
+      <div class="recording-table-wrap">
+        <table class="recording-table">
+          <caption class="h-sub">Results collected during this recording; age is measured at the recording's current or stop time.</caption>
+          <thead><tr><th scope="col">PID / measurement</th><th scope="col">Valid</th><th scope="col">Missing</th>
+            <th scope="col">Failed</th><th scope="col">Valid Hz</th><th scope="col">Age</th></tr></thead>
+          <tbody id="recordingQualityRows"></tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <section id="diagnosticGraphs" class="card">
+    <details id="graphDetails" open>
+      <summary>Diagnostic graphs</summary>
+      <p id="graphEmpty">Start a diagnostic recording to graph the recorded measurements.</p>
+      <div id="graphContent" hidden>
+        <p id="graphSource" class="recording-source"></p>
+        <div class="graph-controls">
+          <label for="graphRange">Time range
+            <select id="graphRange" disabled>
+              <option value="all">Entire recording</option>
+              <option value="30">Last 30 seconds</option>
+              <option value="60">Last 60 seconds</option>
+              <option value="300">Last 5 minutes</option>
+              <option value="custom">Custom interval</option>
+            </select>
+          </label>
+          <div id="graphCustom" class="graph-custom" hidden>
+            <label for="graphFrom">Start (s)<input id="graphFrom" type="number" min="0" step="0.001" value="0"></label>
+            <label for="graphTo">End (s)<input id="graphTo" type="number" min="0" step="0.001" value="1"></label>
+            <button id="graphApplyRange" type="button" class="btn btn-small">Apply range</button>
+          </div>
+        </div>
+        <p id="graphRangeError" class="graph-error" role="alert"></p>
+        <p id="graphWindow" class="h-sub"></p>
+        <p class="graph-guidance">Each filled marker is an actual recorded measurement. Points are not connected,
+          smoothed, or interpolated. Open circles below the plot mark missing results; crosses mark failed or
+          unplottable results. Blue circles and orange squares distinguish the series. Graphs use recorded native units.</p>
+        <p class="graph-caution">Oxygen readings are sparse and acquired sequentially. Unobserved changes between
+          points are unknown; these graphs cannot establish switching speed, simultaneous sensor behavior, or
+          catalytic-converter failure. Check the achieved rate and measurement times before interpreting a pattern.</p>
+
+        <figure class="diagnostic-graph">
+          <figcaption id="title-oxygen">Oxygen sensor voltage · shared elapsed-time axis</figcaption>
+          <p class="h-sub">Bank 1 upstream/downstream labels appear only when the recording confirms sensor locations.</p>
+          <ul id="legend-oxygen" class="graph-legend"></ul>
+          <canvas id="graph-oxygen" tabindex="0" role="img" aria-labelledby="title-oxygen"
+            aria-describedby="inspect-oxygen">Oxygen readings are available through the measurement inspection controls.</canvas>
+          <div class="graph-inspection-controls"><button id="previous-oxygen" class="btn btn-small" type="button" disabled aria-label="Previous oxygen measurement">Previous</button>
+            <button id="next-oxygen" class="btn btn-small" type="button" disabled aria-label="Next oxygen measurement">Next</button></div>
+          <output id="inspect-oxygen" class="graph-inspection" aria-live="polite"></output>
+        </figure>
+
+        <figure class="diagnostic-graph">
+          <figcaption id="title-trims">Bank 1 fuel trims</figcaption>
+          <ul id="legend-trims" class="graph-legend"></ul>
+          <canvas id="graph-trims" tabindex="0" role="img" aria-labelledby="title-trims" aria-describedby="inspect-trims">Fuel-trim readings are available through the measurement inspection controls.</canvas>
+          <div class="graph-inspection-controls"><button id="previous-trims" class="btn btn-small" type="button" disabled aria-label="Previous fuel-trim measurement">Previous</button>
+            <button id="next-trims" class="btn btn-small" type="button" disabled aria-label="Next fuel-trim measurement">Next</button></div>
+          <output id="inspect-trims" class="graph-inspection" aria-live="polite"></output>
+        </figure>
+
+        <h3>Engine operating conditions</h3>
+        <p class="h-sub">Separate unit scales, with the same selected elapsed-time window as the oxygen and trim graphs.</p>
+        <figure class="diagnostic-graph">
+          <figcaption id="title-rpm">Engine speed</figcaption>
+          <ul id="legend-rpm" class="graph-legend"></ul>
+          <canvas id="graph-rpm" tabindex="0" role="img" aria-labelledby="title-rpm" aria-describedby="inspect-rpm">RPM readings are available through the measurement inspection controls.</canvas>
+          <div class="graph-inspection-controls"><button id="previous-rpm" class="btn btn-small" type="button" disabled aria-label="Previous RPM measurement">Previous</button>
+            <button id="next-rpm" class="btn btn-small" type="button" disabled aria-label="Next RPM measurement">Next</button></div>
+          <output id="inspect-rpm" class="graph-inspection" aria-live="polite"></output>
+        </figure>
+        <figure class="diagnostic-graph">
+          <figcaption id="title-load">Engine load and throttle position</figcaption>
+          <ul id="legend-load" class="graph-legend"></ul>
+          <canvas id="graph-load" tabindex="0" role="img" aria-labelledby="title-load" aria-describedby="inspect-load">Load and throttle readings are available through the measurement inspection controls.</canvas>
+          <div class="graph-inspection-controls"><button id="previous-load" class="btn btn-small" type="button" disabled aria-label="Previous load or throttle measurement">Previous</button>
+            <button id="next-load" class="btn btn-small" type="button" disabled aria-label="Next load or throttle measurement">Next</button></div>
+          <output id="inspect-load" class="graph-inspection" aria-live="polite"></output>
+        </figure>
+        <figure class="diagnostic-graph">
+          <figcaption id="title-coolant">Coolant temperature</figcaption>
+          <ul id="legend-coolant" class="graph-legend"></ul>
+          <canvas id="graph-coolant" tabindex="0" role="img" aria-labelledby="title-coolant" aria-describedby="inspect-coolant">Coolant readings are available through the measurement inspection controls.</canvas>
+          <div class="graph-inspection-controls"><button id="previous-coolant" class="btn btn-small" type="button" disabled aria-label="Previous coolant measurement">Previous</button>
+            <button id="next-coolant" class="btn btn-small" type="button" disabled aria-label="Next coolant measurement">Next</button></div>
+          <output id="inspect-coolant" class="graph-inspection" aria-live="polite"></output>
+        </figure>
+      </div>
+    </details>
+  </section>
+
   <section id="gauges" class="gauges hidden"></section>
 
   <section id="dtcSection" class="card hidden">
@@ -109,6 +223,9 @@
 <script src="dtc-db.js"></script>
 <script src="obd.js"></script>
 <script src="demo.js"></script>
+<script src="telemetry.js"></script>
+<script src="graphs.js"></script>
+<script src="graph-ui.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

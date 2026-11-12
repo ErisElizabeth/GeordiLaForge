@@ -95,6 +95,33 @@ const PIDS = {
   0x5E: { name: 'Fuel rate', unit: 'L/h', min: 0, max: 100, dec: 1, decode: b => W(b) / 20 },
 };
 
+/* Minimum payload lengths, after the 41/PID bytes. Remaining definitions use one
+ * byte. These are encoding requirements, not the narrower dashboard bar ranges. */
+const PID_TWO_BYTE = new Set([
+  0x03, 0x0C, 0x10, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B,
+  0x1F, 0x21, 0x22, 0x23, 0x31, 0x32, 0x3C, 0x3D, 0x3E, 0x3F,
+  0x42, 0x43, 0x44, 0x5E,
+]);
+
+function decodePidReading(pid, bytes) {
+  const def = PIDS[pid];
+  const invalid = reason => ({ quality: 'failed', value: null, reason });
+  if (!def) return invalid('PID has no decoder');
+  if (bytes === null) return { quality: 'missing', value: null,
+    reason: 'No matching PID payload; NO DATA, timeout, or unrecognized response' };
+  if (!Array.isArray(bytes) || bytes.length < (PID_TWO_BYTE.has(pid) ? 2 : 1)) {
+    return invalid('Truncated or invalid PID payload');
+  }
+  if (!bytes.every(b => Number.isInteger(b) && b >= 0 && b <= 255)) return invalid('Invalid data byte');
+  try {
+    const value = def.decode(bytes);
+    if (def.text ? typeof value !== 'string' || !value.length : !Number.isFinite(value)) {
+      return invalid('Invalid decoded value');
+    }
+    return { quality: 'valid', value, reason: null };
+  } catch (e) { return invalid('Decode failed: ' + e.message); }
+}
+
 /* PIDs shown in the hero gauges when supported */
 const GAUGE_PIDS = [
   { pid: 0x0C, max: 7000 },
