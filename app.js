@@ -12,6 +12,7 @@ let transport = null, elm = null, pollSession = 0;
 let connectionSerial = 0;
 const recorder = new TelemetryRecorder();
 const diagnosticGraphs = new DiagnosticGraphs();
+const diagnosticExports = new DiagnosticExports(() => recorder.session);
 const state = {
   running: false,
   busy: false, connection: null, supported: new Set(), sensorMask: null, vehicle: {},
@@ -56,6 +57,7 @@ function renderRecording() {
   status.className = 'chip' + (recorder.active ? ' chip-crit' : '');
   const summary = recorder.summary();
   diagnosticGraphs.update(session, summary);
+  diagnosticExports.update(session);
   if (!session) return;
   const reasons = { 'operator-stop': 'Stopped by operator', disconnected: 'Connection ended',
     reconnect: 'Connection replaced', 'adapter-probe': 'Adapter diagnosis started',
@@ -503,6 +505,7 @@ function dtcCard(code, pending) {
 async function refreshDtcs(supported, connection = state.connection) {
   if (!currentConnection(connection)) return;
   const client = connection.client;
+  const recordingRequest = recorder.captureRequest(connection.id);
   const list = $('#dtcList'), summary = $('#dtcSummary');
   list.innerHTML = ''; summary.innerHTML = '';
   $('#freezeWrap').classList.add('hidden');
@@ -513,6 +516,8 @@ async function refreshDtcs(supported, connection = state.connection) {
   if (!currentConnection(connection)) return;
   const pending = await client.readDtcs(0x07);
   if (!currentConnection(connection)) return;
+  // Piggyback only on this existing refresh; export never initiates ECU commands.
+  captureRecordingTroubleCodes(recorder, recordingRequest, stored, pending);
 
   if (st) {
     $('#milChip').classList.toggle('hidden', !st.mil);

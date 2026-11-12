@@ -71,6 +71,25 @@
     </details>
   </section>
 
+  <section id="exportSection" class="card">
+    <div class="card-head"><h2>Export a stopped recording</h2>
+      <div class="card-actions">
+        <button id="btnExportReport" class="btn btn-primary" type="button" disabled>Export Report</button>
+        <button id="btnExportCsv" class="btn" type="button" disabled>Export CSV</button>
+      </div>
+    </div>
+    <div class="export-privacy">
+      <label><input id="exportOmitIdentifiers" type="checkbox" checked> Omit vehicle identifiers, including VIN</label>
+      <label><input id="exportIncludeNotes" type="checkbox"> Include operator notes (review them for other identifying information)</label>
+    </div>
+    <p class="h-sub">Export before reloading: recordings and report previews exist only in this tab.
+      Both exports use the complete stopped recording, regardless of the graph time range.
+      Known identifiers and VIN-like text are redacted when omission is selected; arbitrary personal details in notes cannot be detected reliably.</p>
+    <p class="h-sub">Trouble codes appear only if the existing Re-read action completed during that recording.
+      Export sends no vehicle commands. CSV contains a recording metadata row (including notes, if selected), then every recorded result.</p>
+    <p id="exportStatus" role="status"></p>
+  </section>
+
   <section id="diagnosticGraphs" class="card">
     <details id="graphDetails" open>
       <summary>Diagnostic graphs</summary>
@@ -219,6 +238,15 @@
   </div>
 </dialog>
 
+<dialog id="reportDialog" class="report-dialog">
+  <div class="report-toolbar">
+    <p id="reportStatus" role="status">Preparing report.</p>
+    <button id="btnReportPrint" class="btn btn-primary" type="button" disabled>Print / Save as PDF</button>
+    <button id="btnReportClose" class="btn" type="button">Close report</button>
+  </div>
+  <iframe id="reportFrame" title="Geordi LaForge diagnostic report preview"></iframe>
+</dialog>
+
 <script src="pids.js"></script>
 <script src="dtc-db.js"></script>
 <script src="obd.js"></script>
@@ -226,6 +254,9 @@
 <script src="telemetry.js"></script>
 <script src="graphs.js"></script>
 <script src="graph-ui.js"></script>
+<script src="exports.js"></script>
+<script src="report.js"></script>
+<script src="export-ui.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -59,15 +59,19 @@ function harness({ fastTimers = true } = {}) {
       timers.add(timer); return timer;
     }, clearTimeout(timer) { timers.delete(timer); clearTimeout(timer); },
     window: { confirm: () => true,
-      addEventListener(name, callback) { windowEvents.set(name, callback); },
+      addEventListener(name, callback) {
+        if (!windowEvents.has(name)) windowEvents.set(name, []);
+        windowEvents.get(name).push(callback);
+      },
       setInterval(callback) { uiTicks.push(callback); return uiTicks.length; } },
   });
-  loadFiles(context, ['pids.js', 'dtc-db.js', 'obd.js', 'demo.js', 'telemetry.js', 'graphs.js', 'graph-ui.js', 'app.js']);
+  loadFiles(context, ['pids.js', 'dtc-db.js', 'obd.js', 'demo.js', 'telemetry.js', 'graphs.js', 'graph-ui.js',
+    'exports.js', 'report.js', 'export-ui.js', 'app.js']);
   return { context, run: code => vm.runInContext(code, context),
     node: id => document.querySelector('#' + id),
     click: id => document.querySelector('#' + id).dispatch('click'),
     tick: () => uiTicks.forEach(fn => fn()),
-    pagehide: () => windowEvents.get('pagehide')(),
+    pagehide: () => windowEvents.get('pagehide').forEach(fn => fn()),
     attach(pid01, { source = 'vehicle', supported = [0x06, 0x14], sensorMask = null } = {}) {
       context.testPid01 = pid01;
       context.testSupported = supported;
