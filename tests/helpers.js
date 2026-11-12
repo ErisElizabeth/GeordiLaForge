@@ -65,7 +65,7 @@ function harness({ fastTimers = true } = {}) {
       },
       setInterval(callback) { uiTicks.push(callback); return uiTicks.length; } },
   });
-  loadFiles(context, ['pids.js', 'polling.js', 'dtc-db.js', 'obd.js', 'demo.js', 'telemetry.js', 'graphs.js', 'graph-ui.js',
+  loadFiles(context, ['pids.js', 'capabilities.js', 'polling.js', 'dtc-db.js', 'obd.js', 'demo.js', 'telemetry.js', 'graphs.js', 'graph-ui.js',
     'exports.js', 'report.js', 'export-ui.js', 'app.js']);
   return { context, run: code => vm.runInContext(code, context),
     node: id => document.querySelector('#' + id),

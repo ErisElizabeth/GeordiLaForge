@@ -87,3 +87,76 @@ class FocusedPollingPlan {
       : 'Focused requested, but no verified Bank 1 O2 or supported Bank 1 trim targets are available. Dashboard default schedule used.';
   }
 }
+
+/* Comparison profiles reuse M4's health, retry, and rotation implementation.
+ * Verification reads are separate from the successfully-decoded scheduling pool. */
+class ComparisonPollingPlan extends FocusedPollingPlan {
+  constructor(profile, capabilities) {
+    super(capabilities.supported, capabilities.masks[0x13] ?? null, capabilities.definitions);
+    this.profile = profile; this.capabilities = capabilities; this.validationIndex = 0;
+    this.excluded = []; this.targets = [];
+    if (profile === 'oxygen-comparison') {
+      for (const sensor of [1, 2]) for (const bank of [1, 2]) {
+        const pid = [...this.health.keys()].find(candidate => {
+          const location = capabilities.location(candidate);
+          return location?.bank === bank && location.sensor === sensor;
+        });
+        if (pid === undefined) this.excluded.push({ label: 'B' + bank + 'S' + sensor, reason: 'No verified advertised O2 voltage PID' });
+        else this.targets.push(pid);
+      }
+    } else if (profile === 'trim-comparison') {
+      for (const pid of [0x06, 0x08, 0x07, 0x09]) {
+        if (this.health.has(pid)) this.targets.push(pid);
+        else this.excluded.push({ pid, reason: 'Not advertised or decoder unavailable' });
+      }
+    } else throw new Error('Unknown comparison profile');
+    this.active = this.targets.length > 0;
+    this.priority = this.targets.slice();
+    this.essential = [0x05, 0x04, 0x11, 0x03].filter(pid => this.health.has(pid));
+    this.rpm = this.health.has(0x0C) ? 0x0C : null;
+    this.other = []; // Optional channels do not consume comparison bandwidth.
+    this.candidates = [...new Set([...this.targets, ...(this.rpm === null ? [] : [this.rpm]), ...this.essential])];
+  }
+
+  eligible(pid, now) { return this.candidates.includes(pid) && this.capabilities.success(pid) && super.eligible(pid, now); }
+  canValidate(pid, now) { return this.candidates.includes(pid) && !this.capabilities.success(pid) && super.eligible(pid, now); }
+
+  nextValidation(now) {
+    const pendingTargets = this.targets.filter(pid => !this.capabilities.success(pid));
+    const pool = pendingTargets.some(pid => this.canValidate(pid, now)) ? pendingTargets : this.candidates;
+    for (let i = 0; i < pool.length; i++) {
+      const pid = pool[this.validationIndex++ % pool.length];
+      if (this.canValidate(pid, now)) return pid;
+    }
+    return null;
+  }
+
+  nextBatch(now) {
+    if (!this.active) return [];
+    this.round++;
+    const offset = (this.round - 1) % this.targets.length;
+    const ordered = [...this.targets.slice(offset), ...this.targets.slice(0, offset)];
+    const batch = ordered.filter(pid => this.eligible(pid, now));
+    if (this.rpm !== null && (this.profile === 'trim-comparison' || this.round % 2 === 0) && this.eligible(this.rpm, now)) batch.push(this.rpm);
+    if (this.round % 4 === 0 || !batch.length) {
+      const context = this._rotate(this.essential, 'essentialIndex', now);
+      if (context !== null) batch.push(context);
+    }
+    return [...new Set(batch)];
+  }
+
+  idleDelay(now) {
+    const deadlines = this.candidates.map(pid => this.health.get(pid).eligibleAt);
+    return Math.max(10, Math.min(250, Math.min(...deadlines) - now));
+  }
+
+  summary(now) { return super.summary(now).filter(stats => this.candidates.includes(stats.pid)); }
+
+  description() {
+    const name = this.profile === 'oxygen-comparison' ? 'Oxygen Sensor Comparison' : 'Fuel Trim Comparison';
+    if (!this.active) return name + ': no suitable advertised targets; Dashboard default schedule used.';
+    return name + ': fair target rotation after successful decoding; one advertised candidate validation per round. ' +
+      (this.profile === 'oxygen-comparison' ? 'RPM every second round. ' : 'RPM each round. ') +
+      'One essential condition every fourth round; no optional background. Existing 15/30/60 s retries apply.';
+  }
+}

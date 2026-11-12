@@ -35,7 +35,7 @@ function diagnosticReportRowGroups(items) {
 function diagnosticReportDocument(exported) {
   const stats = diagnosticExportStatistics(exported);
   const index = new TelemetryGraphIndex(); index.update(exported);
-  const models = DIAGNOSTIC_GRAPH_SPECS.map(spec => buildDiagnosticGraph(index, spec,
+  const models = diagnosticGraphSpecs(exported).map(spec => buildDiagnosticGraph(index, spec,
     diagnosticGraphRange(exported.endedElapsedMs), exported.endedElapsedMs));
   const block = (title, content) => '<section class="report-block"><h2>' + reportEscape(title) + '</h2>' + content + '</section>';
   const table = (heads, rows) => '<table><thead><tr>' + heads.map(h => '<th scope="col">' + reportEscape(h) + '</th>').join('') +
@@ -43,12 +43,16 @@ function diagnosticReportDocument(exported) {
   const blocks = [];
   const identity = exported.privacy.omitIdentifiers ? 'Omitted by operator'
     : exported.metadata.vin || 'Unavailable - VIN not captured in recording metadata';
+  const mode = exported.metadata.polling?.requestedMode || exported.metadata.polling?.mode;
+  const profile = { dashboard: 'Dashboard default', focused: 'Focused diagnostics',
+    'oxygen-comparison': 'Oxygen Sensor Comparison', 'trim-comparison': 'Fuel Trim Comparison' }[mode];
   blocks.push(block('Recording summary', table(['Field', 'Recorded information'], [
     ['Data source', diagnosticSourceNotice(exported.source)], ['Recording ID', exported.id],
     ['Vehicle VIN', identity], ...(exported.metadata.vehicleName ? [['Vehicle name', exported.metadata.vehicleName]] : []),
     ['Start time (UTC)', exported.startedAt || 'Unavailable'], ['Stop time (UTC)', exported.endedAt],
     ['Duration', reportNumber(exported.endedElapsedMs / 1000) + ' s (' + reportNumber(exported.endedElapsedMs) + ' ms)'],
     ['Communication protocol', exported.metadata.protocol || 'Unavailable - not captured'],
+    ['Sampling profile at start', profile || mode || 'Unavailable - not captured'],
     ['Recording ended because', exported.stopReason || 'Unavailable'],
     ['Recorded results', exported.samples.length + ': ' + stats.counts.valid + ' valid, ' + stats.counts.missing +
       ' missing, ' + stats.counts.failed + ' failed' + (stats.counts.other ? ', ' + stats.counts.other + ' unrecognized quality' : '')],
@@ -82,7 +86,7 @@ function diagnosticReportDocument(exported) {
       [event.type, event.timestamp || 'Unavailable', reportNumber(event.elapsedMs), event.reason || 'Not recorded']))));
   for (const model of models) {
     const legends = model.series.map((series, i) => '<li><strong class="series-' + i + '">' + (i ? '■ ' : '● ') +
-      reportEscape(series.label) + ' (' + reportEscape(model.unit) + '), PID ' + series.pid.toString(16).toUpperCase().padStart(2, '0') + '</strong><br>' +
+      reportEscape(series.label) + ' (' + reportEscape(model.unit) + '), PID ' + graphPidText(series.pid) + '</strong><br>' +
       reportEscape(series.availability) + '. ' + series.valid + ' valid / ' + series.missing + ' missing / ' + series.failed + ' failed or unplottable. ' +
       'Valid rate: ' + (series.rateHz === null ? 'unavailable (need distinct valid times)' : reportNumber(series.rateHz) + ' Hz') +
       '. Latest valid age at stop: ' + (series.ageMs === null ? 'unavailable' : reportNumber(series.ageMs / 1000) + ' s') +

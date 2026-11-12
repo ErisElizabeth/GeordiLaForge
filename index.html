@@ -44,24 +44,51 @@
         <select id="pollingMode" disabled>
           <option value="dashboard">Dashboard default</option>
           <option value="focused">Focused diagnostics</option>
+          <option value="oxygen-comparison">Oxygen Sensor Comparison</option>
+          <option value="trim-comparison">Fuel Trim Comparison</option>
         </select>
       </label>
     </div>
     <p id="pollingModeStatus" role="status">Connect or enter Demo mode to choose a sampling mode.</p>
     <p class="h-sub">Choose a mode before starting a recording. Stop the recording to change modes; the connection stays open.
-      Focused mode prioritizes verified Bank 1 O2 voltages, Bank 1 fuel trims and RPM. Other dashboard values update less often.
+      Focused mode prioritizes verified Bank 1 O2 voltages, Bank 1 fuel trims and RPM. Comparison profiles prioritize the selected
+      signals across both verified banks; other dashboard channels can become stale until Dashboard default is restored.
       Achieved rates depend on the adapter and ECU; faster polling does not guarantee a diagnostic-quality O2 waveform.</p>
     <details id="focusedSampling" hidden>
-      <summary>Live focused sampling rates and retries</summary>
-      <p class="h-sub">Statistics since selecting focused mode. Recording statistics are available below.
+      <summary>Live profile sampling rates, latency and retries</summary>
+      <p class="h-sub">Statistics since selecting this profile. Recording statistics are available below.
         Missing or invalid replies trigger retry delays after two consecutive failures for that PID.
         Waiting periods do not create artificial samples. Rates require two valid readings at distinct times.</p>
       <p id="focusedExclusions" class="h-sub"></p>
       <div class="recording-table-wrap"><table class="recording-table">
         <thead><tr><th scope="col">PID / measurement</th><th scope="col">Valid</th><th scope="col">Missing</th>
-          <th scope="col">Failed</th><th scope="col">Valid Hz</th><th scope="col">Age</th><th scope="col">Retry status</th></tr></thead>
+          <th scope="col">Failed</th><th scope="col">Valid Hz</th><th scope="col">Age</th><th scope="col">Retry status</th>
+          <th scope="col">Mean latency</th><th scope="col">Last latency</th></tr></thead>
         <tbody id="focusedSamplingRows"></tbody>
       </table></div>
+    </details>
+  </section>
+
+  <section class="card">
+    <details id="capabilitiesDetails">
+      <summary>ECU capabilities</summary>
+      <p id="capabilitiesEmpty">Connect or enter Demo mode to see the advertised Mode 01 inventory.</p>
+      <div id="capabilitiesContent" hidden>
+        <p id="capabilitiesSummary"></p>
+        <p class="h-sub">Passive inventory from advertised support bitmaps and responses already received. A decoder's presence
+          does not mean a live response has succeeded. Comparison profiles validate advertised candidates through the same
+          command loop before scheduling them. O2 locations require an unambiguous sensor-layout response.
+          Latency includes queue wait; inventory is for this connection. No additional probes run when opening this view.</p>
+        <label for="capabilitiesFilter">Show
+          <select id="capabilitiesFilter"><option value="advertised">Advertised PIDs</option>
+            <option value="references">Advertised and known reference PIDs</option></select>
+        </label>
+        <div class="recording-table-wrap"><table class="recording-table">
+          <thead><tr><th scope="col">PID</th><th scope="col">Measurement</th><th scope="col">Capability</th>
+            <th scope="col">Observed response</th><th scope="col">Profile suitability</th><th scope="col">Last latency</th></tr></thead>
+          <tbody id="capabilitiesRows"></tbody>
+        </table></div>
+      </div>
     </details>
   </section>
 
@@ -148,7 +175,7 @@
           points are unknown; these graphs cannot establish switching speed, simultaneous sensor behavior, or
           catalytic-converter failure. Check the achieved rate and measurement times before interpreting a pattern.</p>
 
-        <figure class="diagnostic-graph">
+        <figure id="panel-oxygen" class="diagnostic-graph">
           <figcaption id="title-oxygen">Oxygen sensor voltage · shared elapsed-time axis</figcaption>
           <p class="h-sub">Bank 1 upstream/downstream labels appear only when the recording confirms sensor locations.</p>
           <ul id="legend-oxygen" class="graph-legend"></ul>
@@ -159,7 +186,7 @@
           <output id="inspect-oxygen" class="graph-inspection" aria-live="polite"></output>
         </figure>
 
-        <figure class="diagnostic-graph">
+        <figure id="panel-trims" class="diagnostic-graph">
           <figcaption id="title-trims">Bank 1 fuel trims</figcaption>
           <ul id="legend-trims" class="graph-legend"></ul>
           <canvas id="graph-trims" tabindex="0" role="img" aria-labelledby="title-trims" aria-describedby="inspect-trims">Fuel-trim readings are available through the measurement inspection controls.</canvas>
@@ -168,9 +195,42 @@
           <output id="inspect-trims" class="graph-inspection" aria-live="polite"></output>
         </figure>
 
+        <figure id="panel-oxygen-upstream" class="diagnostic-graph" hidden>
+          <figcaption id="title-oxygen-upstream">Upstream O2 voltage · Bank 1 and Bank 2</figcaption>
+          <ul id="legend-oxygen-upstream" class="graph-legend"></ul>
+          <canvas id="graph-oxygen-upstream" tabindex="0" role="img" aria-labelledby="title-oxygen-upstream" aria-describedby="inspect-oxygen-upstream">Recorded upstream oxygen voltages.</canvas>
+          <div class="graph-inspection-controls"><button id="previous-oxygen-upstream" class="btn btn-small" type="button" disabled>Previous</button>
+            <button id="next-oxygen-upstream" class="btn btn-small" type="button" disabled>Next</button></div>
+          <output id="inspect-oxygen-upstream" class="graph-inspection" aria-live="polite"></output>
+        </figure>
+        <figure id="panel-oxygen-downstream" class="diagnostic-graph" hidden>
+          <figcaption id="title-oxygen-downstream">Downstream O2 voltage · Bank 1 and Bank 2</figcaption>
+          <ul id="legend-oxygen-downstream" class="graph-legend"></ul>
+          <canvas id="graph-oxygen-downstream" tabindex="0" role="img" aria-labelledby="title-oxygen-downstream" aria-describedby="inspect-oxygen-downstream">Recorded downstream oxygen voltages.</canvas>
+          <div class="graph-inspection-controls"><button id="previous-oxygen-downstream" class="btn btn-small" type="button" disabled>Previous</button>
+            <button id="next-oxygen-downstream" class="btn btn-small" type="button" disabled>Next</button></div>
+          <output id="inspect-oxygen-downstream" class="graph-inspection" aria-live="polite"></output>
+        </figure>
+        <figure id="panel-trims-short" class="diagnostic-graph" hidden>
+          <figcaption id="title-trims-short">Short-term fuel trims · Bank 1 and Bank 2</figcaption>
+          <ul id="legend-trims-short" class="graph-legend"></ul>
+          <canvas id="graph-trims-short" tabindex="0" role="img" aria-labelledby="title-trims-short" aria-describedby="inspect-trims-short">Recorded short-term fuel trims.</canvas>
+          <div class="graph-inspection-controls"><button id="previous-trims-short" class="btn btn-small" type="button" disabled>Previous</button>
+            <button id="next-trims-short" class="btn btn-small" type="button" disabled>Next</button></div>
+          <output id="inspect-trims-short" class="graph-inspection" aria-live="polite"></output>
+        </figure>
+        <figure id="panel-trims-long" class="diagnostic-graph" hidden>
+          <figcaption id="title-trims-long">Long-term fuel trims · Bank 1 and Bank 2</figcaption>
+          <ul id="legend-trims-long" class="graph-legend"></ul>
+          <canvas id="graph-trims-long" tabindex="0" role="img" aria-labelledby="title-trims-long" aria-describedby="inspect-trims-long">Recorded long-term fuel trims.</canvas>
+          <div class="graph-inspection-controls"><button id="previous-trims-long" class="btn btn-small" type="button" disabled>Previous</button>
+            <button id="next-trims-long" class="btn btn-small" type="button" disabled>Next</button></div>
+          <output id="inspect-trims-long" class="graph-inspection" aria-live="polite"></output>
+        </figure>
+
         <h3>Engine operating conditions</h3>
         <p class="h-sub">Separate unit scales, with the same selected elapsed-time window as the oxygen and trim graphs.</p>
-        <figure class="diagnostic-graph">
+        <figure id="panel-rpm" class="diagnostic-graph">
           <figcaption id="title-rpm">Engine speed</figcaption>
           <ul id="legend-rpm" class="graph-legend"></ul>
           <canvas id="graph-rpm" tabindex="0" role="img" aria-labelledby="title-rpm" aria-describedby="inspect-rpm">RPM readings are available through the measurement inspection controls.</canvas>
@@ -178,7 +238,7 @@
             <button id="next-rpm" class="btn btn-small" type="button" disabled aria-label="Next RPM measurement">Next</button></div>
           <output id="inspect-rpm" class="graph-inspection" aria-live="polite"></output>
         </figure>
-        <figure class="diagnostic-graph">
+        <figure id="panel-load" class="diagnostic-graph">
           <figcaption id="title-load">Engine load and throttle position</figcaption>
           <ul id="legend-load" class="graph-legend"></ul>
           <canvas id="graph-load" tabindex="0" role="img" aria-labelledby="title-load" aria-describedby="inspect-load">Load and throttle readings are available through the measurement inspection controls.</canvas>
@@ -186,7 +246,7 @@
             <button id="next-load" class="btn btn-small" type="button" disabled aria-label="Next load or throttle measurement">Next</button></div>
           <output id="inspect-load" class="graph-inspection" aria-live="polite"></output>
         </figure>
-        <figure class="diagnostic-graph">
+        <figure id="panel-coolant" class="diagnostic-graph">
           <figcaption id="title-coolant">Coolant temperature</figcaption>
           <ul id="legend-coolant" class="graph-legend"></ul>
           <canvas id="graph-coolant" tabindex="0" role="img" aria-labelledby="title-coolant" aria-describedby="inspect-coolant">Coolant readings are available through the measurement inspection controls.</canvas>
@@ -275,6 +335,7 @@
 </dialog>
 
 <script src="pids.js"></script>
+<script src="capabilities.js"></script>
 <script src="polling.js"></script>
 <script src="dtc-db.js"></script>
 <script src="obd.js"></script>

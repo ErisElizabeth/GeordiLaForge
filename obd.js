@@ -217,14 +217,13 @@ class Elm {
   /* Bitmap walk of supported mode-01 PIDs. */
   async supportedPids() {
     const out = new Set();
-    for (const base of [0x00, 0x20, 0x40, 0x60]) {
+    for (let base = 0x00; base <= 0xE0; base += 0x20) {
       const b = await this.pid01(base, base === 0 ? 20000 : 8000);   // first query rides the bus search
       if (!b || b.length < 4) break;
       const v = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
-      for (let i = 0; i < 32; i++) if ((v >>> (31 - i)) & 1) out.add(base + i + 1);
+      for (let i = 0; i < 31; i++) if ((v >>> (31 - i)) & 1) out.add(base + i + 1);
       if (!(v & 1)) break;                       // bit 32 = next range exists
     }
-    for (const r of [0x20, 0x40, 0x60, 0x80]) out.delete(r);
     return out;
   }
 

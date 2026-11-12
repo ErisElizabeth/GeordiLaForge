@@ -32,6 +32,16 @@ function o2Present(b) {
   return out.join('  ') || 'None reported';
 }
 
+function o2PresentFourBanks(b) {
+  const out = [];
+  for (let bank = 0; bank < 4; bank++) {
+    const sensors = [];
+    for (let sensor = 0; sensor < 2; sensor++) if (b[0] & (1 << (bank * 2 + sensor))) sensors.push('S' + (sensor + 1));
+    if (sensors.length) out.push('B' + (bank + 1) + ': ' + sensors.join(','));
+  }
+  return out.join('  ') || 'None reported';
+}
+
 const PIDS = {
   0x03: { name: 'Fuel system status', cat: 'fuel', text: true,
           decode: b => {
@@ -62,6 +72,7 @@ const PIDS = {
   0x1A: { name: 'O2 B2S3 voltage', unit: 'V', min: 0, max: 1.275, dec: 2, decode: b => b[0] / 200 },
   0x1B: { name: 'O2 B2S4 voltage', unit: 'V', min: 0, max: 1.275, dec: 2, decode: b => b[0] / 200 },
   0x1C: { name: 'OBD standard', text: true, static: true, decode: b => OBD_STD[b[0]] || ('Code ' + b[0]) },
+  0x1D: { name: 'O2 sensors present (4-bank layout)', text: true, static: true, decode: o2PresentFourBanks },
   0x1F: { name: 'Engine run time', unit: '', min: 0, max: 65535, dec: 0, decode: W,
           fmt: v => { const m = Math.floor(v / 60), s = v % 60; return m + 'm ' + String(s).padStart(2, '0') + 's'; } },
   0x21: { name: 'Distance with MIL on', unit: 'km', min: 0, max: 65535, dec: 0, decode: W, imp: IMP_MI },

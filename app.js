@@ -17,6 +17,8 @@ const state = {
   running: false,
   busy: false, connection: null, supported: new Set(), sensorMask: null, vehicle: {},
   pollingMode: 'dashboard', pollingRevision: 0, focusPlan: null,
+  capabilities: null, alternativeMask: null,
+  voltageAvailable: false,
   fast: [], slow: [], slowIdx: 0, cycle: 0,
   tiles: new Map(),      // pid -> {root, valueEl, unitEl, canvas, barEl, def}
   hist: new Map(),       // pid -> number[]
@@ -28,9 +30,20 @@ const state = {
 };
 
 /* ---------------- sampling mode ---------------- */
+function ensureCapabilities() {
+  if (!state.capabilities) {
+    state.capabilities = new EcuCapabilities(state.supported);
+    if (state.sensorMask !== null) state.capabilities.masks[0x13] = state.sensorMask;
+    if (state.alternativeMask !== null) state.capabilities.masks[0x1D] = state.alternativeMask;
+  }
+  return state.capabilities;
+}
+
+function activePollingPlan() { return state.pollingMode !== 'dashboard' && state.focusPlan?.active ? state.focusPlan : null; }
+
 function pollingMetadata() {
-  if (state.pollingMode === 'focused' && state.focusPlan) {
-    return { mode: state.focusPlan.active ? 'focused' : 'dashboard', requestedMode: 'focused',
+  if (state.pollingMode !== 'dashboard' && state.focusPlan) {
+    return { mode: state.focusPlan.active ? state.pollingMode : 'dashboard', requestedMode: state.pollingMode,
       policy: state.focusPlan.description() };
   }
   return { mode: 'dashboard', requestedMode: 'dashboard',
@@ -38,13 +51,16 @@ function pollingMetadata() {
 }
 
 function setPollingMode(mode) {
-  if (!['dashboard', 'focused'].includes(mode) || !state.running || state.busy || recorder.active) {
+  if (!['dashboard', 'focused', 'oxygen-comparison', 'trim-comparison'].includes(mode) || !state.running || state.busy || recorder.active) {
     renderPollingMode(); return false;
   }
   if (mode !== state.pollingMode) {
     state.pollingMode = mode; state.pollingRevision++;
-    state.focusPlan = mode === 'focused' ? new FocusedPollingPlan(state.supported, state.sensorMask) : null;
-    if (state.focusPlan) state.focusPlan.source = state.connection.source;
+    state.focusPlan = mode === 'focused' ? new FocusedPollingPlan(state.supported, state.sensorMask)
+      : mode === 'dashboard' ? null : new ComparisonPollingPlan(mode, ensureCapabilities());
+    if (state.focusPlan) { state.focusPlan.source = state.connection.source; state.focusPlan.latency = new Map(); }
+    if (state.focusPlan instanceof ComparisonPollingPlan) $('#voltChip').classList.add('hidden');
+    else if (state.voltageAvailable) $('#voltChip').classList.remove('hidden');
     log('sys', pollingMetadata().policy);
   }
   renderPollingMode(); return true;
@@ -57,18 +73,22 @@ function renderPollingMode() {
   $('#pollingModeStatus').textContent = (source === 'demo' ? 'SIMULATED DATA — ' : '') +
     (!state.running ? 'Polling stopped. Connect or enter Demo mode to choose a sampling mode.' : pollingMetadata().policy) +
     (recorder.active ? ' Stop the recording to change modes.' : '');
-  $('#focusedSampling').hidden = state.pollingMode !== 'focused' || !state.focusPlan;
+  $('#focusedSampling').hidden = state.pollingMode === 'dashboard' || !state.focusPlan;
   const rows = $('#focusedSamplingRows'); rows.innerHTML = '';
   $('#focusedExclusions').textContent = state.focusPlan ? state.focusPlan.excluded.map(item =>
-    'PID ' + hex2(item.pid) + ': ' + item.reason).join('; ') : '';
+    (item.pid === undefined ? item.label : 'PID ' + hex2(item.pid)) + ': ' + item.reason).join('; ') : '';
   if (!state.focusPlan?.active) return;
   for (const stats of state.focusPlan.summary(performance.now())) {
     const row = el('tr');
     const label = recordingLabel(stats.pid).label;
+    const latency = state.focusPlan.latency?.get(stats.pid);
+    const pending = state.focusPlan.canValidate?.(stats.pid, performance.now());
     for (const value of ['01 ' + hex2(stats.pid) + ' · ' + label, stats.valid, stats.missing, stats.failed,
       stats.rateHz === null ? '—' : stats.rateHz.toFixed(3),
       stats.ageMs === null ? 'No valid reading' : (stats.ageMs / 1000).toFixed(1) + ' s',
-      stats.retryMs ? 'Retry in ' + Math.ceil(stats.retryMs / 1000) + ' s' : 'Eligible']) {
+      stats.retryMs ? 'Retry in ' + Math.ceil(stats.retryMs / 1000) + ' s' : pending ? 'Awaiting decode validation' : 'Eligible',
+      latency ? (latency.total / latency.count).toFixed(1) + ' ms' : '—',
+      latency ? latency.last.toFixed(1) + ' ms' : '—']) {
       row.appendChild(el('td', null, String(value)));
     }
     rows.appendChild(row);
@@ -77,10 +97,48 @@ function renderPollingMode() {
 
 $('#pollingMode').addEventListener('change', () => setPollingMode($('#pollingMode').value));
 
+function renderCapabilities() {
+  const inventory = state.capabilities;
+  $('#capabilitiesEmpty').hidden = !!inventory;
+  $('#capabilitiesContent').hidden = !inventory;
+  if (!inventory) return;
+  const advertised = inventory.rows(), decoded = advertised.filter(row => row.decoded).length;
+  $('#capabilitiesSummary').textContent = advertised.length + ' advertised Mode 01 PIDs; ' + decoded +
+    ' with decoders; ' + (advertised.length - decoded) + ' without decoders; ' +
+    advertised.filter(row => row.decodedSuccessfully).length + ' successfully decoded on this connection.';
+  if ($('#capabilitiesDetails').open === false) return;
+  const rows = $('#capabilitiesRows'); rows.innerHTML = '';
+  for (const info of inventory.rows($('#capabilitiesFilter').value === 'references')) {
+    let suitability = info.suitability;
+    const plan = state.focusPlan;
+    if (plan instanceof ComparisonPollingPlan && info.advertised && info.decoded) {
+      suitability = plan.candidates.includes(info.pid)
+        ? plan.eligible(info.pid, performance.now()) ? 'Eligible for selected profile'
+          : plan.canValidate(info.pid, performance.now()) ? 'Candidate: awaiting successful decoding' : 'Waiting for retry'
+        : 'Outside selected comparison profile';
+      if (info.pid >= 0x14 && info.pid <= 0x1B && !info.location) suitability = 'O2 location unverified';
+    }
+    const row = el('tr');
+    for (const value of [hex2(info.pid), info.label, info.classification,
+      info.lastQuality ? (info.decodedSuccessfully ? 'Validated; latest ' : 'Latest ') + info.lastQuality +
+        (info.reason ? ': ' + info.reason : '') : 'Not observed',
+      suitability, info.responseMs === null ? '—' : info.responseMs.toFixed(1) + ' ms']) row.appendChild(el('td', null, value));
+    rows.appendChild(row);
+  }
+}
+$('#capabilitiesFilter').addEventListener('change', renderCapabilities);
+$('#capabilitiesDetails').addEventListener('toggle', renderCapabilities);
+
 /* ---------------- recording ---------------- */
 function recordingLabel(pid) {
   const def = PIDS[pid];
   if (pid >= 0x14 && pid <= 0x1B) {
+    if (state.capabilities) {
+      const location = oxygenLocation(pid, state.supported, state.capabilities.masks);
+      return { label: location ? 'O2 B' + location.bank + 'S' + location.sensor + ' voltage'
+        : 'O2 PID ' + hex2(pid) + ' voltage (location unverified)', locationVerified: !!location,
+        bank: location?.bank ?? null, sensor: location?.sensor ?? null, layoutPid: location?.layoutPid ?? null };
+    }
     const verified = state.sensorMask !== null && !state.supported.has(0x1D) &&
       !!(state.sensorMask & (1 << (pid - 0x14)));
     return { label: verified ? def.name : 'O2 sensor ' + (pid - 0x13) + ' voltage (location unverified)',
@@ -101,6 +159,7 @@ function recordingDuration(ms) {
 function renderRecording() {
   recorder.enforceLimit();
   renderPollingMode();
+  renderCapabilities();
   const session = recorder.session;
   $('#btnRecordStart').disabled = recorder.active || !state.running || state.busy;
   $('#btnRecordStop').disabled = !recorder.active;
@@ -146,6 +205,7 @@ $('#btnRecordStart').addEventListener('click', () => {
     notes, metadata: { ...state.vehicle, polling: pollingMetadata(), connectionStartedAt: state.connection.startedAt,
       supportedPids: [...state.supported].sort((a, b) => a - b),
       sensorLocationPid13: state.sensorMask,
+      sensorLocationPid1D: state.alternativeMask, capabilities: state.capabilities?.snapshot() || null,
       measurements: [...state.supported].filter(pid => PIDS[pid]).map(pid =>
         ({ pid, ...recordingLabel(pid), unit: PIDS[pid].unit || '', static: !!PIDS[pid].static })) } });
   recorder.session.events.push({ type: 'sampling-mode', timestamp: recorder.session.startedAt, elapsedMs: 0,
@@ -264,7 +324,8 @@ function makeGauge(pid, max) {
 function makeTile(pid) {
   const def = PIDS[pid];
   const root = el('div', 'tile');
-  root.appendChild(el('div', 'tile-label', def.name));
+  const label = el('div', 'tile-label', recordingLabel(pid).label);
+  root.appendChild(label);
   const value = el('div', 'tile-value' + (def.text ? ' tile-text' : ''), '—');
   let unitEl = null;
   if (!def.text) {
@@ -282,7 +343,7 @@ function makeTile(pid) {
     root.appendChild(bar);
   }
   $('#tiles').appendChild(root);
-  state.tiles.set(pid, { root, value, unitEl, canvas, barEl, def });
+  state.tiles.set(pid, { root, label, value, unitEl, canvas, barEl, def });
 }
 
 function renderValue(pid, v) {
@@ -360,6 +421,8 @@ function resetUi() {
     .forEach(id => $('#' + id).classList.add('hidden'));
   state.tiles.clear(); state.hist.clear(); state.last.clear(); state.gauges.clear();
   state.supported = new Set(); state.sensorMask = null; state.vehicle = {};
+  state.capabilities = null; state.alternativeMask = null;
+  state.voltageAvailable = false;
   state.pollingMode = 'dashboard'; state.focusPlan = null; state.pollingRevision++;
   state.cycle = 0; state.slowIdx = 0; state.failures = 0;
   $('#milChip').classList.add('hidden');
@@ -426,7 +489,7 @@ async function connect(useDemo) {
     $('#protoChip').classList.remove('hidden');
     const volts = await client.voltage();
     if (!currentConnection(connection)) return;
-    if (volts) { $('#voltChip').textContent = volts.toFixed(1) + ' V'; $('#voltChip').classList.remove('hidden'); }
+    if (volts) { state.voltageAvailable = true; $('#voltChip').textContent = volts.toFixed(1) + ' V'; $('#voltChip').classList.remove('hidden'); }
 
     buildDashboard(supported);
     setChip(useDemo ? 'Demo — live' : 'Live', 'chip-good');
@@ -450,6 +513,7 @@ async function connect(useDemo) {
 }
 
 function buildDashboard(supported) {
+  state.capabilities = new EcuCapabilities(supported);
   const dynamic = [...supported].filter(p => PIDS[p] && !PIDS[p].static && p !== 0x01).sort((a, b) => a - b);
   state.fast = FAST_PIDS.filter(p => supported.has(p));
   state.slow = dynamic.filter(p => !state.fast.includes(p));
@@ -474,11 +538,14 @@ async function readStatics(supported, connection = state.connection) {
     const b = await connection.client.pid01(pid);
     if (!currentConnection(connection)) return;
     const reading = decodePidReading(pid, b);
+    ensureCapabilities().observe(pid, reading, b, performance.now());
     if (reading.quality === 'valid') {
       if (pid === 0x13) state.sensorMask = b[0];
+      if (pid === 0x1D) state.alternativeMask = b[0];
       pushSample(pid, reading.value);
     }
   }
+  for (const [pid, tile] of state.tiles) if (tile.label) tile.label.textContent = recordingLabel(pid).label;
 }
 
 /* ---------------- polling ---------------- */
@@ -487,15 +554,22 @@ async function samplePid(pid, connection = state.connection) {
   // Capture before queue submission. A recording started while this read is in
   // flight must not inherit it, even when the Bluetooth connection is unchanged.
   const request = recorder.captureRequest(connection.id);
-  const focusPlan = state.pollingMode === 'focused' && state.focusPlan?.active ? state.focusPlan : null;
+  const focusPlan = activePollingPlan(), requestStarted = performance.now();
   const observe = quality => {
-    if (focusPlan && state.focusPlan === focusPlan) focusPlan.observe(pid, quality, performance.now());
+    if (focusPlan && state.focusPlan === focusPlan) {
+      const now = performance.now(), duration = now - requestStarted;
+      focusPlan.observe(pid, quality, now);
+      if (!focusPlan.latency) focusPlan.latency = new Map();
+      const latency = focusPlan.latency.get(pid) || { total: 0, count: 0, last: 0 };
+      latency.total += duration; latency.count++; latency.last = duration; focusPlan.latency.set(pid, latency);
+    }
   };
   let responseRecorded = false;
   try {
     const b = await connection.client.pid01(pid, 5000);
     if (!currentConnection(connection)) return;
     const reading = decodePidReading(pid, b);
+    ensureCapabilities().observe(pid, reading, b, performance.now(), performance.now() - requestStarted);
     observe(reading.quality);
     recordReading(request, pid, reading);
     responseRecorded = true;
@@ -510,6 +584,7 @@ async function samplePid(pid, connection = state.connection) {
   } catch (e) {
     if (!currentConnection(connection)) return;
     if (!responseRecorded) {
+      ensureCapabilities().observe(pid, { quality: 'failed', reason: e.message }, null, performance.now(), performance.now() - requestStarted);
       observe('failed');
       recordReading(request, pid, { quality: 'failed', value: null, reason: e.message });
     }
@@ -526,9 +601,11 @@ async function pollLoop(connection = state.connection) {
   let queries = 0, t0 = performance.now();
   polling: while (active()) {
     const revision = state.pollingRevision;
-    const focusPlan = state.pollingMode === 'focused' && state.focusPlan?.active ? state.focusPlan : null;
+    const focusPlan = activePollingPlan();
     if (focusPlan) {
       const batch = focusPlan.nextBatch(performance.now());
+      const validation = focusPlan.nextValidation?.(performance.now()) ?? null;
+      if (validation !== null && !batch.includes(validation)) batch.push(validation);
       if (!batch.length) {
         await new Promise(r => setTimeout(r, focusPlan.idleDelay(performance.now())));
         continue;
@@ -536,7 +613,7 @@ async function pollLoop(connection = state.connection) {
       for (const pid of batch) {
         if (!active()) return;
         if (revision !== state.pollingRevision) continue polling;
-        if (!focusPlan.eligible(pid, performance.now())) continue;
+        if (!focusPlan.eligible(pid, performance.now()) && !(pid === validation && focusPlan.canValidate(pid, performance.now()))) continue;
         await samplePid(pid, connection); queries++;
       }
     } else {
@@ -554,10 +631,10 @@ async function pollLoop(connection = state.connection) {
     }
     if (!active()) return;
     if (revision !== state.pollingRevision) continue;
-    if (++state.cycle % 10 === 0) {
+    if (++state.cycle % 10 === 0 && !(focusPlan instanceof ComparisonPollingPlan)) {
       const v = await connection.client.voltage().catch(() => null);
       if (!active()) return;
-      if (v) $('#voltChip').textContent = v.toFixed(1) + ' V';
+      if (v) { state.voltageAvailable = true; $('#voltChip').textContent = v.toFixed(1) + ' V'; $('#voltChip').classList.remove('hidden'); }
     }
     const now = performance.now();
     if (now - t0 > 2500) {
@@ -599,6 +676,7 @@ async function refreshDtcs(supported, connection = state.connection) {
   if (!currentConnection(connection)) return;
   const pending = await client.readDtcs(0x07);
   if (!currentConnection(connection)) return;
+  if (st) ensureCapabilities().observe(0x01, { quality: 'valid' }, null, performance.now());
   // Piggyback only on this existing refresh; export never initiates ECU commands.
   captureRecordingTroubleCodes(recorder, recordingRequest, stored, pending);
 

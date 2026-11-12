@@ -52,11 +52,16 @@ function prepareDiagnosticExport(session, { omitIdentifiers = true, includeNotes
     protocol: redact(originalMetadata.protocol) || null,
     connectionStartedAt: redact(originalMetadata.connectionStartedAt) || null,
     polling: originalMetadata.polling ? { mode: redact(originalMetadata.polling.mode),
-      policy: redact(originalMetadata.polling.policy) } : null,
+      requestedMode: redact(originalMetadata.polling.requestedMode), policy: redact(originalMetadata.polling.policy) } : null,
+    capabilities: Array.isArray(originalMetadata.capabilities) ? originalMetadata.capabilities.map(row => ({
+      pid: row.pid, label: redact(row.label), advertised: row.advertised === true, decoded: row.decoded === true,
+      decodedSuccessfully: row.decodedSuccessfully === true, classification: redact(row.classification),
+      suitability: redact(row.suitability), lastQuality: redact(row.lastQuality), reason: redact(row.reason),
+    })) : null,
     supportedPids: Array.isArray(originalMetadata.supportedPids) ? originalMetadata.supportedPids.slice() : null,
     measurements: (originalMetadata.measurements || []).map(item => ({ pid: item.pid,
       label: redact(item.label), unit: redact(item.unit), locationVerified: item.locationVerified === true,
-      static: item.static === true })),
+      static: item.static === true, bank: item.bank ?? null, sensor: item.sensor ?? null, layoutPid: item.layoutPid ?? null })),
     troubleCodes: validCapture ? { capturedAt: redact(capture.capturedAt), elapsedMs: capture.elapsedMs,
       stored: capture.stored.map(redact), pending: capture.pending.map(redact) } : null,
   };

@@ -54,7 +54,7 @@ Real numeric negative measurements remain numeric. No values are interpolated.
 Run the dependency-free tests with:
 
 ```powershell
-node --test tests/recording.test.js tests/graphs.test.js tests/exports.test.js tests/polling.test.js
+node --test tests/*.test.js
 ```
 
 `tests/report-browser-check.js` is optional PDF/preview QA. It requires an existing

@@ -8,10 +8,12 @@ class DiagnosticGraphs {
     this.session = null; this.summary = null; this.range = null; this.renderKey = null;
     this.customRange = null; this.rangeError = '';
     this.$ = id => document.querySelector('#' + id);
-    this.views = DIAGNOSTIC_GRAPH_SPECS.map(spec => ({ spec,
+    this.allViews = [...DIAGNOSTIC_GRAPH_SPECS, ...COMPARISON_GRAPH_SPECS].map(spec => ({ spec,
+      root: this.$('panel-' + spec.id),
       canvas: this.$('graph-' + spec.id), legend: this.$('legend-' + spec.id),
       inspection: this.$('inspect-' + spec.id), previous: this.$('previous-' + spec.id),
       next: this.$('next-' + spec.id), selectedOrder: null, model: null, layout: null }));
+    this.views = this.allViews.slice(0, DIAGNOSTIC_GRAPH_SPECS.length);
     this.$('graphRange').addEventListener('change', () => {
       const custom = this.$('graphRange').value === 'custom';
       this.$('graphCustom').hidden = !custom;
@@ -25,7 +27,7 @@ class DiagnosticGraphs {
     });
     this.$('graphApplyRange').addEventListener('click', () => this.applyRange());
     this.$('graphDetails').addEventListener('toggle', () => this.refresh());
-    for (const view of this.views) {
+    for (const view of this.allViews) {
       view.previous.addEventListener('click', () => this.step(view, -1));
       view.next.addEventListener('click', () => this.step(view, 1));
       view.canvas.addEventListener('click', event => {
@@ -53,7 +55,7 @@ class DiagnosticGraphs {
     }
     if (typeof ResizeObserver === 'function') {
       this.resizeObserver = new ResizeObserver(() => this.refresh());
-      for (const view of this.views) this.resizeObserver.observe(view.canvas);
+      for (const view of this.allViews) this.resizeObserver.observe(view.canvas);
     }
     window.addEventListener('resize', () => this.refresh());
   }
@@ -82,6 +84,9 @@ class DiagnosticGraphs {
     const replaced = this.session !== session;
     this.session = session; this.summary = summary;
     this.index.update(session);
+    const specs = diagnosticGraphSpecs(session);
+    this.views = specs.map(spec => { const view = this.allViews.find(item => item.spec.id === spec.id); view.spec = spec; return view; });
+    for (const view of this.allViews) view.root.hidden = !this.views.includes(view);
     this.$('graphContent').hidden = !session;
     this.$('graphEmpty').hidden = !!session;
     this.$('graphRange').disabled = !session;
@@ -142,7 +147,7 @@ class DiagnosticGraphs {
       marker.setAttribute('aria-hidden', 'true');
       name.appendChild(marker);
       name.appendChild(document.createTextNode(series.label + ' · ' + view.spec.unit +
-        ' · PID ' + series.pid.toString(16).toUpperCase().padStart(2, '0')));
+        ' · PID ' + graphPidText(series.pid)));
       item.appendChild(name);
       const status = document.createElement('span'); status.className = 'graph-series-quality';
       status.textContent = series.availability + '. Window: ' + series.valid + ' valid, ' + series.missing +

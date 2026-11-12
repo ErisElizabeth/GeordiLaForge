@@ -15,6 +15,26 @@ const DIAGNOSTIC_GRAPH_SPECS = [
     baseline: [20, 110], pids: [0x05] },
 ];
 
+const COMPARISON_GRAPH_SPECS = [
+  { id: 'oxygen-upstream', title: 'Upstream oxygen: Bank 1 / Bank 2', axis: 'Voltage (V)', unit: 'V', baseline: [0, 1.275], pids: [0x14, 0x18] },
+  { id: 'oxygen-downstream', title: 'Downstream oxygen: Bank 1 / Bank 2', axis: 'Voltage (V)', unit: 'V', baseline: [0, 1.275], pids: [0x15, 0x19] },
+  { id: 'trims-short', title: 'Short-term fuel trims: Bank 1 / Bank 2', axis: 'Fuel trim (%)', unit: '%', baseline: [-10, 10], pids: [0x06, 0x08] },
+  { id: 'trims-long', title: 'Long-term fuel trims: Bank 1 / Bank 2', axis: 'Fuel trim (%)', unit: '%', baseline: [-10, 10], pids: [0x07, 0x09] },
+];
+
+function diagnosticGraphSpecs(session) {
+  const mode = session?.metadata?.polling?.requestedMode || session?.metadata?.polling?.mode;
+  if (mode === 'trim-comparison') return [...COMPARISON_GRAPH_SPECS.slice(2), ...DIAGNOSTIC_GRAPH_SPECS.slice(2)];
+  if (mode !== 'oxygen-comparison') return DIAGNOSTIC_GRAPH_SPECS;
+  const measurements = session.metadata.measurements || [];
+  return [...COMPARISON_GRAPH_SPECS.slice(0, 2).map((spec, i) => ({ ...spec,
+    pids: [1, 2].map(bank => measurements.find(item => item.locationVerified === true && item.bank === bank && item.sensor === i + 1)?.pid ?? null),
+    labels: [1, 2].map(bank => 'Bank ' + bank + ' ' + (i ? 'downstream' : 'upstream')),
+  })), ...DIAGNOSTIC_GRAPH_SPECS.slice(2)];
+}
+
+const graphPidText = pid => Number.isInteger(pid) ? pid.toString(16).toUpperCase().padStart(2, '0') : 'unavailable';
+
 const DIAGNOSTIC_GRAPH_PALETTE = {
   background: '#ffffff', text: '#171717', grid: '#d6d6d6',
   colors: ['#0064a5', '#ad3d00'],
@@ -102,13 +122,14 @@ function buildDiagnosticGraph(index, spec, range, durationMs) {
     for (let i = from; i < all.length && all[i].sample.elapsedMs <= range.endMs; i++) {
       selected.push({ ...all[i], seriesIndex, ...graphNumericQuality(all[i].sample, spec.unit) });
     }
-    const oxygen = pid === 0x14 || pid === 0x15;
+    const oxygen = Number.isInteger(pid) && pid >= 0x14 && pid <= 0x1B;
     const verified = oxygen && descriptor?.locationVerified === true &&
       all.every(entry => entry.sample.locationVerified === true);
-    const label = oxygen ? (verified
-      ? (pid === 0x14 ? 'B1S1 · upstream' : 'B1S2 · downstream')
-      : 'O2 PID ' + pid.toString(16).toUpperCase() + ' · location unverified')
-      : ({ 6: 'Short-term trim B1', 7: 'Long-term trim B1', 12: 'Engine RPM',
+    const bank = descriptor?.bank ?? (pid <= 0x17 ? 1 : 2), sensor = descriptor?.sensor ?? ((pid - 0x14) % 4 + 1);
+    const label = pid === null ? spec.labels[seriesIndex] + ' · no verified PID' : oxygen ? (verified
+      ? 'B' + bank + 'S' + sensor + (sensor === 1 ? ' · upstream' : sensor === 2 ? ' · downstream' : '')
+      : 'O2 PID ' + graphPidText(pid) + ' · location unverified')
+      : ({ 6: 'Short-term trim B1', 7: 'Long-term trim B1', 8: 'Short-term trim B2', 9: 'Long-term trim B2', 12: 'Engine RPM',
         4: 'Engine load', 17: 'Throttle position', 5: 'Coolant temperature' }[pid]);
     const valid = selected.filter(entry => entry.quality === 'valid');
     let latest = null;
@@ -121,6 +142,7 @@ function buildDiagnosticGraph(index, spec, range, durationMs) {
         : supported?.has(pid) ? 'Advertised by ECU; no recorded results yet'
           : supported ? 'Not advertised by this ECU' : 'PID support information unavailable';
     if (supported && !supported.has(pid) && all.length) availability = 'Recorded responses exist, but PID was not advertised';
+    if (pid === null) availability = 'No verified advertised sensor location for this bank / position';
     return { pid, label, verified, seriesIndex, entries: selected, valid: valid.length,
       missing: selected.filter(entry => entry.quality === 'missing').length,
       failed: selected.filter(entry => entry.quality === 'failed').length,
@@ -210,7 +232,7 @@ function renderDiagnosticCanvas(canvas, model, { width = 800, height = 280, pixe
     }
     ctx.font = '10px system-ui, sans-serif'; ctx.textAlign = 'right';
     ctx.fillStyle = color;
-    ctx.fillText(series.pid.toString(16).toUpperCase().padStart(2, '0') + ' gaps', left - 7, layout.qualityY(series.seriesIndex));
+    ctx.fillText((series.pid === null ? 'N/A' : graphPidText(series.pid)) + ' gaps', left - 7, layout.qualityY(series.seriesIndex));
     ctx.font = '12px system-ui, sans-serif';
   }
   const selected = model.entries.find(entry => entry.order === selectedOrder);
